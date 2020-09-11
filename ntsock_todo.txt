@@ -1,0 +1,42 @@
+[+] socket()
+[+] bind()
+[+] sendto()
+[+] recvfrom()
+[+] select()
+[+] closesocket()
+[+] UDP Support()
+
+[+] shutdown()
+[/] setsockopt() (SOL_SOCKET)
+[-] getsockopt() (SOL_SOCKET)
+[+] getsockname()
+[+] getpeername()
+[+] connect()
+[/] ioctlsocket()
+[+] send()
+[+] recv()
+
+[+] TCP Support
+[+] DNS Client
+[+] RtlGetLastWin32Error() (error handling)
+
+[-] gethostname()
+[-] getdomainname()
+[-] WSAEnumProtocols()
+[-] GetAdaptersAddresses() (IPv4)
+[-] listen()
+[-] accept()
+
+[-] CancelIo()
+[?] accept pending
+[?] reject
+[-] poll()
+
+[-] Nonblocking Socket
+[-] XP/2000 Support
+[-] NtSockEx Functions
+
+[-] ICMP Support
+[-] Raw Socket Support
+[-] SOCKS4/5 Proxy Client
+[-] Proxy Aware Socket
