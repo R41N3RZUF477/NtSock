@@ -42,8 +42,75 @@ extern "C" {
 #define SIO_INDEX_BIND         _WSAIOW(IOC_VENDOR,8)
 #endif
 
+typedef enum _SOCKET_STATE
+{
+	SocketUndefined = -1,
+	SocketOpen,
+	SocketBound,
+	SocketBoundUdp,
+	SocketConnected,
+	SocketClosed
+} SOCKET_STATE, *PSOCKET_STATE;
+
+typedef struct _SOCK_SHARED_INFO {
+	SOCKET_STATE                State;
+	INT                            AddressFamily;
+	INT                            SocketType;
+	INT                            Protocol;
+	INT                            SizeOfLocalAddress;
+	INT                            SizeOfRemoteAddress;
+	struct linger                LingerData;
+	ULONG                        SendTimeout;
+	ULONG                        RecvTimeout;
+	ULONG                        SizeOfRecvBuffer;
+	ULONG                        SizeOfSendBuffer;
+	struct {
+		BOOLEAN                    Listening:1;
+		BOOLEAN                    Broadcast:1;
+		BOOLEAN                    Debug:1;
+		BOOLEAN                    OobInline:1;
+		BOOLEAN                    ReuseAddresses:1;
+		BOOLEAN                    ExclusiveAddressUse:1;
+		BOOLEAN                    NonBlocking:1;
+		BOOLEAN                    DontUseWildcard:1;
+		BOOLEAN                    ReceiveShutdown:1;
+		BOOLEAN                    SendShutdown:1;
+		BOOLEAN                    UseDelayedAcceptance:1;
+		BOOLEAN                    UseSAN:1;
+		BOOLEAN                    HasGUID:1;
+	} Flags;
+	DWORD                        CreateFlags;
+	DWORD                        CatalogEntryId;
+	DWORD                        ServiceFlags1;
+	DWORD                        ProviderFlags;
+	GROUP                        GroupID;
+	DWORD                        GroupType;
+	INT                            GroupPriority;
+	INT                            SocketLastError;
+	HWND                        hWnd;
+	#ifndef _WIN64
+	LONG                        Padding;
+	#endif
+	DWORD                        SequenceNumber;
+	UINT                        wMsg;
+	LONG                        AsyncEvents;
+	LONG                        AsyncDisabledEvents;
+} SOCK_SHARED_INFO, *PSOCK_SHARED_INFO;
+
+typedef struct _SOCKET_CONTEXT {
+	SOCK_SHARED_INFO SharedData;
+	GUID Guid;
+	ULONG SizeOfHelperData;
+	ULONG Padding;
+	SOCKADDR LocalAddress;
+	SOCKADDR RemoteAddress;
+	PVOID Helper;
+} SOCKET_CONTEXT, *PSOCKET_CONTEXT;
+
 u_short NtHtons(u_short s);
 struct in_addr NtInetAddr(const char *cp);
+NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize);
+NTSTATUS SetSocketContext(SOCKET sock, const PSOCKET_CONTEXT sockctx, ULONG ctxsize);
 int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LPDWORD lpdwBufferLength);
 SOCKET NtSocket(int af, int type, int protocol);
 int NtBind(SOCKET sock, const struct sockaddr *addr, int addrlen);

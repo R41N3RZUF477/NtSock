@@ -49,16 +49,6 @@ typedef struct _UNICODE_STRING {
 #define AFD_SELECT_FILTER_WRITE  0x4
 #define AFD_SELECT_FILTER_EXCEPT 0x102
 
-typedef enum _SOCKET_STATE
-{
-	SocketUndefined = -1,
-	SocketOpen,
-	SocketBound,
-	SocketBoundUdp,
-	SocketConnected,
-	SocketClosed
-} SOCKET_STATE, *PSOCKET_STATE;
-
 typedef enum _EVENT_TYPE {
 	NotificationEvent,
 	SynchronizationEvent
@@ -73,61 +63,6 @@ typedef enum _KEY_VALUE_INFORMATION_CLASS {
 	KeyValueLayerInformation,
 	MaxKeyValueInfoClass
 } KEY_VALUE_INFORMATION_CLASS;
-
-typedef struct _SOCK_SHARED_INFO {
-	SOCKET_STATE                State;
-	INT                            AddressFamily;
-	INT                            SocketType;
-	INT                            Protocol;
-	INT                            SizeOfLocalAddress;
-	INT                            SizeOfRemoteAddress;
-	struct linger                LingerData;
-	ULONG                        SendTimeout;
-	ULONG                        RecvTimeout;
-	ULONG                        SizeOfRecvBuffer;
-	ULONG                        SizeOfSendBuffer;
-	struct {
-		BOOLEAN                    Listening:1;
-		BOOLEAN                    Broadcast:1;
-		BOOLEAN                    Debug:1;
-		BOOLEAN                    OobInline:1;
-		BOOLEAN                    ReuseAddresses:1;
-		BOOLEAN                    ExclusiveAddressUse:1;
-		BOOLEAN                    NonBlocking:1;
-		BOOLEAN                    DontUseWildcard:1;
-		BOOLEAN                    ReceiveShutdown:1;
-		BOOLEAN                    SendShutdown:1;
-		BOOLEAN                    UseDelayedAcceptance:1;
-		BOOLEAN                    UseSAN:1;
-		BOOLEAN                    HasGUID:1;
-	} Flags;
-	DWORD                        CreateFlags;
-	DWORD                        CatalogEntryId;
-	DWORD                        ServiceFlags1;
-	DWORD                        ProviderFlags;
-	GROUP                        GroupID;
-	DWORD                        GroupType;
-	INT                            GroupPriority;
-	INT                            SocketLastError;
-	HWND                        hWnd;
-	#ifndef _WIN64
-	LONG                        Padding;
-	#endif
-	DWORD                        SequenceNumber;
-	UINT                        wMsg;
-	LONG                        AsyncEvents;
-	LONG                        AsyncDisabledEvents;
-} SOCK_SHARED_INFO, *PSOCK_SHARED_INFO;
-
-typedef struct _SOCKET_CONTEXT {
-	SOCK_SHARED_INFO SharedData;
-	GUID Guid;
-	ULONG SizeOfHelperData;
-	ULONG Padding;
-	SOCKADDR LocalAddress;
-	SOCKADDR RemoteAddress;
-	PVOID Helper;
-} SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 
 typedef struct _OBJECT_ATTRIBUTES {
 	ULONG           Length;
@@ -291,8 +226,6 @@ NTSTATUS CheckSocketParameter(SOCKET sock);
 NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flags);
 ULONG GetSocketContextLength(PSOCKET_CONTEXT sockctx);
 ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockctx);
-NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize);
-NTSTATUS SetSocketContext(SOCKET sock, const PSOCKET_CONTEXT sockctx, ULONG ctxsize);
 
 #ifdef __cplusplus
 }

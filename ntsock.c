@@ -1445,6 +1445,7 @@ int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen)
 	status = GetSocketContext(sock, sockctx, &sctxlen);
 	if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 	{
+		status = 0;
 		if(sockctx->SharedData.SizeOfLocalAddress <= *namelen)
 		{
 			*namelen = sockctx->SharedData.SizeOfLocalAddress;
@@ -1484,6 +1485,7 @@ int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen)
 	status = GetSocketContext(sock, sockctx, &sctxlen);
 	if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 	{
+		status = 0;
 		if(sockctx->SharedData.SizeOfRemoteAddress <= *namelen)
 		{
 			*namelen = sockctx->SharedData.SizeOfRemoteAddress;
