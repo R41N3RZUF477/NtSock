@@ -28,6 +28,9 @@ typedef struct _UNICODE_STRING {
 
 #include "afd_shared.h"
 
+#define IOCTL_AFD_DISCONNECTEX 0x000120cb
+#define IOCTL_AFD_CONNECTEX    0x000120c7
+
 #ifndef OBJ_CASE_INSENSITIVE
 #define OBJ_CASE_INSENSITIVE 0x00000040L
 #endif
@@ -107,6 +110,15 @@ typedef struct _AFD_CONNECT_INFO_NEW {
 	PVOID unknown2;
 	struct sockaddr Addr;
 } AFD_CONNECT_INFO_NEW, *PAFD_CONNECT_INFO_NEW;
+
+#pragma pack(push, 1)
+typedef struct _AFD_CONNECTEX_INFO_OLD {
+	UINT32 unknown1;
+	UINT32 zero1;
+	USHORT unknown2;
+	struct sockaddr Addr;
+} AFD_CONNECTEX_INFO_OLD, *PAFD_CONNECTEX_INFO_OLD;
+#pragma pack(pop)
 
 typedef struct _AFD_SELECT_DATA_ENTRY {
 	SOCKET sock;

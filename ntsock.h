@@ -129,6 +129,8 @@ int NtIoctlSocket(SOCKET sock, long cmd, u_long *argp);
 int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen);
 int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen);
 int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen);
+int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen);
+int NtDisconnect(SOCKET sock, DWORD flags);
 int NtShutdown(SOCKET sock, int how);
 NTSTATUS NtCloseSocket(SOCKET sock);
 

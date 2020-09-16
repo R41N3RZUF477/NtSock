@@ -213,7 +213,7 @@ NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flag
 		if(flags & SOCKADDR_NULL_OK)
 		{
 			RtlSetLastWin32ErrorAndNtStatusFromNtStatus(0);
-		return 0;
+			return 0;
 		}
 		else
 		{
@@ -1565,6 +1565,81 @@ int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen)
 			}
 		}
 	}
+	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	return -(!!status);
+}
+
+int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen)
+{
+	NTSTATUS status;
+	HANDLE event;
+	IO_STATUS_BLOCK iosb;
+	BYTE condata[FIELD_OFFSET(AFD_CONNECTEX_INFO_OLD, Addr)+SOCK_CONTEXT_ADDR_SIZE];
+	ULONG conlen = FIELD_OFFSET(AFD_CONNECTEX_INFO_OLD, Addr);
+	PAFD_CONNECTEX_INFO_OLD acei;
+
+	if(CheckSocketParameter(sock))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckSockAddrParameter(name, namelen, 0))
+	{
+		return SOCKET_ERROR;
+	}
+	if(NtAutoBind(sock, 0) == SOCKET_ERROR)
+	{
+		return SOCKET_ERROR;
+	}
+	if(namelen > SOCK_CONTEXT_ADDR_SIZE)
+	{
+		namelen = SOCK_CONTEXT_ADDR_SIZE;
+	}
+	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+	if(!status)
+	{
+		conlen += namelen;
+		acei = (PAFD_CONNECTEX_INFO_OLD)&condata[0];
+		acei->unknown1 = 0;
+		acei->zero1 = 1;
+		acei->unknown2 = 0x0e;
+		memcpy(&acei->Addr, name, namelen);
+		status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_CONNECTEX, acei, conlen, NULL, 0);
+		if(status == STATUS_PENDING)
+		{
+			status = NtWaitForSingleObject(event, TRUE, NULL);
+			if(!status)
+			{
+				status = iosb.Status;
+			}
+		}
+		NtClose(event);
+	}
+
+	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	return -(!!status);
+}
+
+int NtDisconnect(SOCKET sock, DWORD flags)
+{
+	NTSTATUS status;
+	HANDLE event;
+	IO_STATUS_BLOCK iosb;
+
+	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+	if(!status)
+	{
+		status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_DISCONNECTEX, &flags, sizeof(DWORD), NULL, 0);
+		if(status == STATUS_PENDING)
+		{
+			status = NtWaitForSingleObject(event, TRUE, NULL);
+			if(!status)
+			{
+				status = iosb.Status;
+			}
+		}
+		NtClose(event);
+	}
+
 	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	return -(!!status);
 }

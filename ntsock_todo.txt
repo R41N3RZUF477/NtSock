@@ -20,6 +20,9 @@
 [+] DNS Client
 [+] RtlGetLastWin32Error() (error handling)
 
+[+] DisconnectEx()
+[+] ConnectEx()
+
 [-] gethostname()
 [-] getdomainname()
 [-] WSAEnumProtocols()
