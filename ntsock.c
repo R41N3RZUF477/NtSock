@@ -175,20 +175,20 @@ NTSTATUS CheckPointerParameter(const void *p)
 	if(!p)
 	{
 		status = STATUS_INVALID_PARAMETER;
+		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	}
-	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	return status;
 }
 
-NTSTATUS CheckArrayParameter(const void *p, int len, int min)
+NTSTATUS CheckArrayParameter(const void *p, int len, int lmin)
 {
 	NTSTATUS status = 0;
 
-	if((!p) || (len < min))
+	if((!p) || (len < lmin))
 	{
 		status = STATUS_INVALID_PARAMETER;
+		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	}
-	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	return status;
 }
 
@@ -199,8 +199,8 @@ NTSTATUS CheckSocketParameter(SOCKET sock)
 	if(sock == INVALID_SOCKET)
 	{
 		status = STATUS_INVALID_HANDLE;
+		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	}
-	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	return status;
 }
 
@@ -212,7 +212,6 @@ NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flag
 	{
 		if(flags & SOCKADDR_NULL_OK)
 		{
-			RtlSetLastWin32ErrorAndNtStatusFromNtStatus(0);
 			return 0;
 		}
 		else
@@ -234,7 +233,7 @@ NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flag
 				status = STATUS_INVALID_PARAMETER;
 				break;
 			case AF_INET6:
-				if(len < 28)
+				if(len < sizeof(SOCKADDR_IN6))
 				{
 					status = STATUS_INVALID_PARAMETER;
 				}
@@ -245,8 +244,49 @@ NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flag
 	{
 		 status = STATUS_INVALID_PARAMETER;
 	}
-	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	if(status)
+	{
+		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	}
 	return status;
+}
+
+SOCKET CreateSocketHandle(int af, int type, int protocol)
+{
+	NTSTATUS status;
+	UNICODE_STRING us;
+	OBJECT_ATTRIBUTES oa;
+	AFD_SOCK_CREATE_EA ea;
+	IO_STATUS_BLOCK iosb;
+	SOCKET sock = INVALID_SOCKET;
+
+	us.Length = sizeof(AFD_DEVICE_PATH)-sizeof(WCHAR);
+	us.MaximumLength = sizeof(AFD_DEVICE_PATH);
+	us.Buffer = (PWSTR)AFD_DEVICE_PATH;
+	memset(&oa, 0, sizeof(OBJECT_ATTRIBUTES));
+	oa.Length = sizeof(OBJECT_ATTRIBUTES);
+	oa.RootDirectory = NULL;
+	oa.ObjectName = &us;
+	oa.Attributes = OBJ_CASE_INSENSITIVE;
+	oa.SecurityDescriptor = NULL;
+	oa.SecurityQualityOfService = NULL;
+	memset(&ea, 0, sizeof(AFD_SOCK_CREATE_EA));
+	ea.unknown1 = 0x001E0F00;
+	memcpy(&ea.afdopenstr[0], AfdCommand, sizeof(AfdCommand));
+	if(type == SOCK_DGRAM)
+	{
+		ea.unknown2 = protocol;
+	}
+	ea.iAdressFamily = af;
+	ea.iSocketType = type;
+	ea.iProtocol = protocol;
+	status = NtCreateFile((PHANDLE)&sock, GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE|WRITE_DAC, &oa, &iosb, NULL, 0, FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_OPEN_IF, 0, &ea, 0x39);
+	if(status)
+	{
+		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+		return INVALID_SOCKET;
+	}
+	return sock;
 }
 
 ULONG GetSocketContextLength(PSOCKET_CONTEXT sockctx)
@@ -325,7 +365,6 @@ NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize)
 		if(!status)
 		{
 			*ctxsize = GetSocketContextLength(sockctx);
-			RtlSetLastWin32ErrorAndNtStatusFromNtStatus(0);
 			return 0;
 		}
 	}
@@ -352,7 +391,6 @@ NTSTATUS SetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, ULONG ctxsize)
 	len = GetSocketContextLength(sockctx);
 	if(ctxsize < len)
 	{
-		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_BUFFER_TOO_SMALL);
 		return STATUS_BUFFER_TOO_SMALL;
 	}
 	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
@@ -430,41 +468,18 @@ SOCKET NtSocket(int af, int type, int protocol)
 	ULONG len;
 	BYTE buffer[SOCK_CONTEXT_BUF_SIZE];
 	PSOCKET_CONTEXT sockctx;
-	UNICODE_STRING us;
-	OBJECT_ATTRIBUTES oa;
-	AFD_SOCK_CREATE_EA ea;
-	IO_STATUS_BLOCK iosb;
 	SOCKET sock = INVALID_SOCKET;
 
 	sockctx = (PSOCKET_CONTEXT)&buffer[0];
 	len = CreateSocketContext(af, type, protocol, sockctx);
 	if(len > 0)
 	{
-		us.Length = sizeof(AFD_DEVICE_PATH)-sizeof(WCHAR);
-		us.MaximumLength = sizeof(AFD_DEVICE_PATH);
-		us.Buffer = (PWSTR)AFD_DEVICE_PATH;
-		memset(&oa, 0, sizeof(OBJECT_ATTRIBUTES));
-		oa.Length = sizeof(OBJECT_ATTRIBUTES);
-		oa.RootDirectory = NULL;
-		oa.ObjectName = &us;
-		oa.Attributes = OBJ_CASE_INSENSITIVE;
-		oa.SecurityDescriptor = NULL;
-		oa.SecurityQualityOfService = NULL;
-		memset(&ea, 0, sizeof(AFD_SOCK_CREATE_EA));
-		ea.unknown1 = 0x001E0F00;
-		memcpy(&ea.afdopenstr[0], AfdCommand, sizeof(AfdCommand));
-		if(sockctx->SharedData.SocketType == SOCK_DGRAM)
+		sock = CreateSocketHandle(sockctx->SharedData.AddressFamily, sockctx->SharedData.SocketType, sockctx->SharedData.Protocol);
+		if(sock == INVALID_SOCKET)
 		{
-			ea.unknown2 = sockctx->SharedData.Protocol;
+			return INVALID_SOCKET;
 		}
-		ea.iAdressFamily = sockctx->SharedData.AddressFamily;
-		ea.iSocketType = sockctx->SharedData.SocketType;
-		ea.iProtocol = sockctx->SharedData.Protocol;
-		status = NtCreateFile((PHANDLE)&sock, GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE|WRITE_DAC, &oa, &iosb, NULL, 0, FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_OPEN_IF, 0, &ea, 0x39);
-		if(!status)
-		{
-			status = SetSocketContext(sock, sockctx, SOCK_CONTEXT_BUF_SIZE);
-		}
+		status = SetSocketContext(sock, sockctx, SOCK_CONTEXT_BUF_SIZE);
 	}
 	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	if(status)
@@ -1501,6 +1516,196 @@ int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen)
 	return -(!!status);
 }
 
+int NtListen(SOCKET sock, int backlog)
+{
+	NTSTATUS status;
+	HANDLE event;
+	IO_STATUS_BLOCK iosb;
+	BYTE buffer[SOCK_CONTEXT_BUF_SIZE];
+	ULONG sctxlen;
+	PSOCKET_CONTEXT sockctx;
+	AFD_LISTEN_DATA ald;
+	LARGE_INTEGER li;
+
+	if(CheckSocketParameter(sock))
+	{
+		return SOCKET_ERROR;
+	}
+	sockctx = (PSOCKET_CONTEXT)&buffer[0];
+	sctxlen = SOCK_CONTEXT_BUF_SIZE;
+	status = GetSocketContext(sock, sockctx, &sctxlen);
+	if(!status)
+	{
+		status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+		if(!status)
+		{
+			ald.UseSAN = 0;
+			ald.Backlog = (ULONG)backlog;
+			ald.UseDelayedAcceptance = 0;
+			status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_START_LISTEN, &ald, sizeof(AFD_LISTEN_DATA), NULL, 0);
+			if(status == STATUS_PENDING)
+			{
+				li.QuadPart = 0xFFFFFFFFFFB3B4C0;
+				status = NtWaitForSingleObject(event, TRUE, &li);
+				if(!status)
+				{
+					status = iosb.Status;
+				}
+			}
+			NtClose(event);
+			if(!status)
+			{
+				sockctx->SharedData.Flags.Listening = 1;
+				status = SetSocketContext(sock, sockctx, sctxlen);
+			}
+		}
+	}
+	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	return -(!!status);
+}
+
+SOCKET NtAccept(SOCKET sock, struct sockaddr *addr, int *addrlen)
+{
+	NTSTATUS status;
+	SOCKET acceptsock = INVALID_SOCKET;
+	HANDLE event;
+	IO_STATUS_BLOCK iosb;
+	BYTE accdata[FIELD_OFFSET(AFD_RECEIVED_ACCEPT_DATA_NEW, Address)+SOCK_CONTEXT_ADDR_SIZE];
+	PAFD_RECEIVED_ACCEPT_DATA_NEW arad;
+	ULONG acclen;
+	AFD_ACCEPT_DATA aad;
+	BYTE buffer[SOCK_CONTEXT_BUF_SIZE];
+	ULONG sctxlen;
+	PSOCKET_CONTEXT sockctx;
+
+	if(CheckSocketParameter(sock))
+	{
+		return INVALID_SOCKET;
+	}
+	if(addr)
+	{
+		if(CheckPointerParameter(addrlen))
+		{
+			return INVALID_SOCKET;
+		}
+		if(CheckArrayParameter(addrlen, *addrlen, sizeof(struct sockaddr)))
+		{
+			return INVALID_SOCKET;
+		}
+	}
+
+	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+	if(!status)
+	{
+		arad = (PAFD_RECEIVED_ACCEPT_DATA_NEW)&accdata[0];
+		acclen = sizeof(accdata);
+		status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_WAIT_FOR_LISTEN, NULL, 0, arad, acclen);
+		if(status == STATUS_PENDING)
+		{
+			status = NtWaitForSingleObject(event, TRUE, NULL);
+			if(!status)
+			{
+				status = iosb.Status;
+			}
+		}
+		if(!status)
+		{
+			sockctx = (PSOCKET_CONTEXT)&buffer[0];
+			sctxlen = SOCK_CONTEXT_BUF_SIZE;
+			status = GetSocketContext(sock, sockctx, &sctxlen);
+			if(!status)
+			{
+				acceptsock = CreateSocketHandle(arad->Address.sa_family, sockctx->SharedData.SocketType, sockctx->SharedData.Protocol);
+				if(acceptsock != INVALID_SOCKET)
+				{
+					aad.UseSAN = 0;
+					aad.SequenceNumber = arad->SequenceNumber;
+					aad.ListenHandle = (HANDLE)acceptsock;
+					status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_ACCEPT, &aad, sizeof(AFD_ACCEPT_DATA), NULL, 0);
+					if(!status)
+					{
+						sockctx->SharedData.State = SocketConnected;
+						sockctx->SharedData.Flags.Listening = 0;
+						memcpy(&buffer[sizeof(SOCKET_CONTEXT) - sockctx->SharedData.SizeOfRemoteAddress - sizeof(PVOID)], &arad->Address, sockctx->SharedData.SizeOfRemoteAddress);
+						status = SetSocketContext(acceptsock, sockctx, sctxlen);
+						if(addr)
+						{
+							memcpy(addr, &arad->Address, *addrlen);
+							*addrlen = sockctx->SharedData.SizeOfRemoteAddress;
+						}
+					}
+				}
+			}
+		}
+		NtClose(event);
+	}
+
+	if(status)
+	{
+		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+		return INVALID_SOCKET;
+	}
+	return acceptsock;
+}
+
+int NtAcceptExLegacy(SOCKET listensock, SOCKET acceptsock, struct sockaddr *addr, int *addrlen)
+{
+	NTSTATUS status;
+	HANDLE event;
+	IO_STATUS_BLOCK iosb;
+	BYTE accdata[(SOCK_CONTEXT_ADDR_SIZE+16)*2];
+	AFD_ACCEPTEX_INFO_OLD aaei;
+
+	if(CheckSocketParameter(listensock))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckSocketParameter(acceptsock))
+	{
+		return SOCKET_ERROR;
+	}
+	if(addr)
+	{
+		if(CheckPointerParameter(addrlen))
+		{
+			return SOCKET_ERROR;
+		}
+		if(CheckArrayParameter(addrlen, *addrlen, sizeof(struct sockaddr)))
+		{
+			return SOCKET_ERROR;
+		}
+	}
+
+	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+	if(!status)
+	{
+		memset(&aaei, 0, sizeof(AFD_ACCEPTEX_INFO_OLD));
+		aaei.sock = acceptsock;
+		aaei.localaddrsize = SOCK_CONTEXT_ADDR_SIZE + 16;
+		aaei.remoteaddrsize = SOCK_CONTEXT_ADDR_SIZE + 16;
+		status = NtDeviceIoControlFile((HANDLE)listensock, event, NULL, NULL, &iosb, IOCTL_AFD_ACCEPTEX, &aaei, sizeof(AFD_ACCEPTEX_INFO_OLD), &accdata[0], (SOCK_CONTEXT_ADDR_SIZE+16)*2);
+		if(status == STATUS_PENDING)
+		{
+			status = NtWaitForSingleObject(event, TRUE, NULL);
+			if(!status)
+			{
+				status = iosb.Information;
+			}
+		}
+		NtClose(event);
+		if(!status)
+		{
+			if(addr)
+			{
+				memcpy(&addr, &accdata[10], *addrlen);
+			}
+		}
+	}
+
+	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	return -(!!status);
+}
+
 int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen)
 {
 	NTSTATUS status;
@@ -1577,6 +1782,7 @@ int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen)
 	BYTE condata[FIELD_OFFSET(AFD_CONNECTEX_INFO_OLD, Addr)+SOCK_CONTEXT_ADDR_SIZE];
 	ULONG conlen = FIELD_OFFSET(AFD_CONNECTEX_INFO_OLD, Addr);
 	PAFD_CONNECTEX_INFO_OLD acei;
+	LARGE_INTEGER li;
 
 	if(CheckSocketParameter(sock))
 	{
@@ -1606,8 +1812,13 @@ int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen)
 		status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_CONNECTEX, acei, conlen, NULL, 0);
 		if(status == STATUS_PENDING)
 		{
-			status = NtWaitForSingleObject(event, TRUE, NULL);
-			if(!status)
+			li.QuadPart = 0xFFFFFFFFFE363C80;
+			status = NtWaitForSingleObject(event, TRUE, &li);
+			if(status == STATUS_TIMEOUT)
+			{
+				NtCancelIoFile((HANDLE)sock, &iosb);
+			}
+			else if(!status)
 			{
 				status = iosb.Status;
 			}
@@ -1622,8 +1833,9 @@ int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen)
 int NtDisconnect(SOCKET sock, DWORD flags)
 {
 	NTSTATUS status;
-	HANDLE event;
+	HANDLE event = NULL;
 	IO_STATUS_BLOCK iosb;
+	LARGE_INTEGER li;
 
 	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
 	if(!status)
@@ -1631,8 +1843,13 @@ int NtDisconnect(SOCKET sock, DWORD flags)
 		status = NtDeviceIoControlFile((HANDLE)sock, event, NULL, NULL, &iosb, IOCTL_AFD_DISCONNECTEX, &flags, sizeof(DWORD), NULL, 0);
 		if(status == STATUS_PENDING)
 		{
-			status = NtWaitForSingleObject(event, TRUE, NULL);
-			if(!status)
+			li.QuadPart = 0xFFFFFFFFFE363C80;
+			status = NtWaitForSingleObject(event, TRUE, &li);
+			if(status == STATUS_TIMEOUT)
+			{
+				NtCancelIoFile((HANDLE)sock, &iosb);
+			}
+			else if(!status)
 			{
 				status = iosb.Status;
 			}
@@ -1684,6 +1901,130 @@ int NtShutdown(SOCKET sock, int how)
 NTSTATUS NtCloseSocket(SOCKET sock)
 {
 	return NtClose((HANDLE)sock);
+}
+
+int NtGetHostname(char *name,int namelen)
+{
+	NTSTATUS status;
+	HANDLE key;
+	UNICODE_STRING us, ussub;
+	OBJECT_ATTRIBUTES oa;
+	BYTE buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+512];
+	ULONG buffersize;
+	PKEY_VALUE_PARTIAL_INFORMATION kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
+	int i;
+
+	if(!name)
+	{
+		return SOCKET_ERROR;
+	}
+	if(namelen < 1)
+	{
+		return SOCKET_ERROR;
+	}
+	if(namelen > 256)
+	{
+		namelen = 256;
+	}
+
+	us.Length = sizeof(REG_TCPIP_PARAMETER_STR) - sizeof(WCHAR);
+	us.MaximumLength = sizeof(REG_TCPIP_PARAMETER_STR);
+	us.Buffer = (PWSTR)REG_TCPIP_PARAMETER_STR;
+	oa.Length = sizeof(OBJECT_ATTRIBUTES);
+	oa.RootDirectory = NULL;
+	oa.SecurityDescriptor = NULL;
+	oa.SecurityQualityOfService = NULL;
+	oa.Attributes = OBJ_CASE_INSENSITIVE;
+	oa.ObjectName = &us;
+	status = NtOpenKey(&key, KEY_QUERY_VALUE, &oa);
+	if(!status)
+	{
+		ussub.Length = sizeof(REG_HOSTNAME_VALUE_STR) - sizeof(WCHAR);
+		ussub.MaximumLength = sizeof(REG_HOSTNAME_VALUE_STR);
+		ussub.Buffer = (PWSTR)REG_HOSTNAME_VALUE_STR;
+		status = NtQueryValueKey(key, &ussub, KeyValuePartialInformation, kvpi, sizeof(buffer), &buffersize);
+		if(!status)
+		{
+			if(kvpi->DataLength >= namelen)
+			{
+				namelen--;
+			}
+			else
+			{
+				namelen = kvpi->DataLength;
+			}
+			for(i = 0; i < namelen; ++i)
+			{
+				name[i] = (char)kvpi->Data[i<<1];
+			}
+			name[namelen] = '\0';
+		}
+		NtClose(key);
+	}
+
+	return -(!!status);
+}
+
+int NtGetDomainName(char *name,int namelen)
+{
+	NTSTATUS status;
+	HANDLE key;
+	UNICODE_STRING us, ussub;
+	OBJECT_ATTRIBUTES oa;
+	BYTE buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+512];
+	ULONG buffersize;
+	PKEY_VALUE_PARTIAL_INFORMATION kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
+	int i;
+
+	if(!name)
+	{
+		return SOCKET_ERROR;
+	}
+	if(namelen < 1)
+	{
+		return SOCKET_ERROR;
+	}
+	if(namelen > 256)
+	{
+		namelen = 256;
+	}
+
+	us.Length = sizeof(REG_TCPIP_PARAMETER_STR) - sizeof(WCHAR);
+	us.MaximumLength = sizeof(REG_TCPIP_PARAMETER_STR);
+	us.Buffer = (PWSTR)REG_TCPIP_PARAMETER_STR;
+	oa.Length = sizeof(OBJECT_ATTRIBUTES);
+	oa.RootDirectory = NULL;
+	oa.SecurityDescriptor = NULL;
+	oa.SecurityQualityOfService = NULL;
+	oa.Attributes = OBJ_CASE_INSENSITIVE;
+	oa.ObjectName = &us;
+	status = NtOpenKey(&key, KEY_QUERY_VALUE, &oa);
+	if(!status)
+	{
+		ussub.Length = sizeof(REG_DOMAIN_VALUE_STR) - sizeof(WCHAR);
+		ussub.MaximumLength = sizeof(REG_DOMAIN_VALUE_STR);
+		ussub.Buffer = (PWSTR)REG_DOMAIN_VALUE_STR;
+		status = NtQueryValueKey(key, &ussub, KeyValuePartialInformation, kvpi, sizeof(buffer), &buffersize);
+		if(!status)
+		{
+			if(kvpi->DataLength >= namelen)
+			{
+				namelen--;
+			}
+			else
+			{
+				namelen = kvpi->DataLength;
+			}
+			for(i = 0; i < namelen; ++i)
+			{
+				name[i] = (char)kvpi->Data[i<<1];
+			}
+			name[namelen] = '\0';
+		}
+		NtClose(key);
+	}
+
+	return -(!!status);
 }
 
 #ifdef __cplusplus

@@ -22,13 +22,14 @@
 
 [+] DisconnectEx()
 [+] ConnectEx()
+[+] AcceptEx()
 
-[-] gethostname()
-[-] getdomainname()
+[+] gethostname()
+[+] getdomainname()
 [-] WSAEnumProtocols()
 [-] GetAdaptersAddresses() (IPv4)
-[-] listen()
-[-] accept()
+[+] listen()
+[+] accept()
 
 [-] CancelIo()
 [?] accept pending

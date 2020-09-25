@@ -30,6 +30,7 @@ typedef struct _UNICODE_STRING {
 
 #define IOCTL_AFD_DISCONNECTEX 0x000120cb
 #define IOCTL_AFD_CONNECTEX    0x000120c7
+#define IOCTL_AFD_ACCEPTEX     0x00012083
 
 #ifndef OBJ_CASE_INSENSITIVE
 #define OBJ_CASE_INSENSITIVE 0x00000040L
@@ -41,6 +42,10 @@ typedef struct _UNICODE_STRING {
 #define REG_PROTOCOL_ENUM_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9\\Catalog_Entries"
 #endif
 #define REG_PROTOCOL_VALUE_STR L"PackedCatalogItem"
+
+#define REG_TCPIP_PARAMETER_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters"
+#define REG_HOSTNAME_VALUE_STR L"Hostname"
+#define REG_DOMAIN_VALUE_STR L"Domain"
 
 #define SOCKADDR_NULL_OK    0x1
 #define SOCKADDR_NO_AF_OK   0x2
@@ -104,6 +109,11 @@ typedef struct _AFD_BIND_DATA_NEW {
 	struct sockaddr Addr;
 } AFD_BIND_DATA_NEW, *PAFD_BIND_DATA_NEW;
 
+ typedef struct _AFD_RECEIVED_ACCEPT_DATA_NEW {
+     ULONG               SequenceNumber;
+     struct sockaddr           Address;
+ } AFD_RECEIVED_ACCEPT_DATA_NEW, *PAFD_RECEIVED_ACCEPT_DATA_NEW;
+
 typedef struct _AFD_CONNECT_INFO_NEW {
 	PVOID unknown1;
 	PVOID zero1;
@@ -119,6 +129,14 @@ typedef struct _AFD_CONNECTEX_INFO_OLD {
 	struct sockaddr Addr;
 } AFD_CONNECTEX_INFO_OLD, *PAFD_CONNECTEX_INFO_OLD;
 #pragma pack(pop)
+
+typedef struct _AFD_ACCEPTEX_INFO_OLD {
+	ULONG unknown1;
+	SOCKET sock;
+	ULONG unknown2;
+	ULONG localaddrsize;
+	ULONG remoteaddrsize;
+} AFD_ACCEPTEX_INFO_OLD, *PAFD_ACCEPTEX_INFO_OLD;
 
 typedef struct _AFD_SELECT_DATA_ENTRY {
 	SOCKET sock;
@@ -203,6 +221,11 @@ extern WINAPI NTSTATUS NtDeviceIoControlFile(
 	ULONG OutputBufferLength
 );
 
+extern WINAPI NTSTATUS NtCancelIoFile(
+	HANDLE FileHandle,
+	PIO_STATUS_BLOCK IoStatusBlock
+);
+
 extern WINAPI NTSTATUS NtWaitForSingleObject(
 	IN HANDLE Handle,
 	IN BOOLEAN Alertable,
@@ -233,9 +256,10 @@ extern WINAPI BOOLEAN RtlFreeHeap(
 void IncrementStringIntW(WCHAR *wstr, int len);
 NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_INFOW protocolinfo);
 NTSTATUS CheckPointerParameter(const void *p);
-NTSTATUS CheckArrayParameter(const void *p, int len, int min);
+NTSTATUS CheckArrayParameter(const void *p, int len, int lmin);
 NTSTATUS CheckSocketParameter(SOCKET sock);
 NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flags);
+SOCKET CreateSocketHandle(int af, int type, int protocol);
 ULONG GetSocketContextLength(PSOCKET_CONTEXT sockctx);
 ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockctx);
 

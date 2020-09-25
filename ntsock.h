@@ -21,6 +21,11 @@ extern "C" {
 
 //#define NTSOCK_SELECT_STACKALLOC (127 * sizeof(AFD_SELECT_DATA_ENTRY) + sizeof(AFD_SELECT_DATA))
 
+#define PORT_DEF_RANGE_MIN_XP    1025
+#define PORT_DEF_RANGE_MAX_XP    5000
+#define PORT_DEF_RANGE_MIN_VISTA 49152
+#define PORT_DEF_RANGE_MAX_VISTA 65535
+
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT    0x2
 #endif
@@ -128,11 +133,16 @@ int NtGetSockOpt(SOCKET sock, int level, int optname, const char *optval, int *o
 int NtIoctlSocket(SOCKET sock, long cmd, u_long *argp);
 int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen);
 int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen);
+int NtListen(SOCKET sock, int backlog);
+SOCKET NtAccept(SOCKET sock, struct sockaddr *addr, int *addrlen);
+int NtAcceptExLegacy(SOCKET listensock, SOCKET acceptsock, struct sockaddr *addr, int *addrlen);
 int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen);
 int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen);
 int NtDisconnect(SOCKET sock, DWORD flags);
 int NtShutdown(SOCKET sock, int how);
 NTSTATUS NtCloseSocket(SOCKET sock);
+int NtGetHostname(char *name,int namelen);
+int NtGetDomainName(char *name,int namelen);
 
 #ifdef __cplusplus
 }
