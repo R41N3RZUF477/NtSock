@@ -47,6 +47,9 @@ extern "C" {
 #define SIO_INDEX_BIND         _WSAIOW(IOC_VENDOR,8)
 #endif
 
+// SOCKET_CONTEXT structure from Dr. Memory Github repository (msafdlib.h)
+// Small adjustment for x64
+
 typedef enum _SOCKET_STATE
 {
 	SocketUndefined = -1,
