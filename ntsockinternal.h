@@ -26,12 +26,28 @@ typedef struct _UNICODE_STRING {
 	PWSTR  Buffer;
 } UNICODE_STRING, *PUNICODE_STRING;
 
+typedef struct _FILE_FULL_EA_INFORMATION {
+	ULONG  NextEntryOffset;
+	UCHAR  Flags;
+	UCHAR  EaNameLength;
+	USHORT EaValueLength;
+} FILE_FULL_EA_INFORMATION, *PFILE_FULL_EA_INFORMATION;
+
 #include "afd_shared.h"
 
 #define IOCTL_AFD_DISCONNECTEX 0x000120cb
 #define IOCTL_AFD_CONNECTEX    0x000120c7
 #define IOCTL_AFD_ACCEPTEX     0x00012083
 
+#ifndef OBJ_INHERIT
+#define OBJ_INHERIT 0x00000002L
+#endif
+#ifndef OBJ_PERMANENT
+#define OBJ_PERMANENT 0x00000010L
+#endif
+#ifndef OBJ_EXCLUSIVE
+#define OBJ_EXCLUSIVE 0x00000020L
+#endif
 #ifndef OBJ_CASE_INSENSITIVE
 #define OBJ_CASE_INSENSITIVE 0x00000040L
 #endif
@@ -50,6 +66,16 @@ typedef struct _UNICODE_STRING {
 #define SOCKADDR_NULL_OK    0x1
 #define SOCKADDR_NO_AF_OK   0x2
 #define SOCKADDR_NO_PORT_OK 0x4
+
+#define TCP_DEVICE_PATH L"\\Device\\Tcp"
+#define UDP_DEVICE_PATH L"\\Device\\Udp"
+#define RAWIP_DEVICE_PATH L"\\Device\\RawIp"
+#define IP_DEVICE_PATH L"\\Device\\Ip"
+
+#define TCP6_DEVICE_PATH L"\\Device\\Tcp6"
+#define UDP6_DEVICE_PATH L"\\Device\\Udp6"
+#define RAWIP6_DEVICE_PATH L"\\Device\\RawIp6"
+#define IP6_DEVICE_PATH L"\\Device\\Ip6"
 
 #define AFD_DEVICE_PATH L"\\Device\\Afd\\Endpoint"
 
@@ -89,7 +115,7 @@ typedef struct _IO_STATUS_BLOCK {
   ULONG_PTR Information;
 } IO_STATUS_BLOCK, *PIO_STATUS_BLOCK;
 
-typedef struct _AFD_SOCK_CREATE_EA {
+/*typedef struct _AFD_SOCK_CREATE_EA {
 	ULONG zero1;
 	ULONG unknown1;
 	CHAR afdopenstr[16];
@@ -102,6 +128,39 @@ typedef struct _AFD_SOCK_CREATE_EA {
 	ULONG unknown3;
 	ULONG unknown4;
 	BYTE data[1];
+} AFD_SOCK_CREATE_EA, *PAFD_SOCK_CREATE_EA;*/
+
+typedef struct _AFD_SOCK_CREATE_EA_VISTA {
+	FILE_FULL_EA_INFORMATION EaInfo;
+	CHAR afdopenstr[16];
+	ULONG unknown2;
+	ULONG zero2;
+	INT iAdressFamily;
+	INT iSocketType;
+	INT iProtocol;
+	ULONG zero3;
+	ULONG unknown3;
+	ULONG unknown4;
+	BYTE data[1];
+} AFD_SOCK_CREATE_EA_VISTA, *PAFD_SOCK_CREATE_EA_VISTA;
+
+typedef struct _AFD_SOCK_CREATE_EA_XP {
+	FILE_FULL_EA_INFORMATION EaInfo;
+	CHAR afdopenstr[16];
+	ULONG flags;
+	LONG groupid;
+	ULONG tdnamesize;
+	WCHAR tdname[15];
+	BYTE data[1];
+} AFD_SOCK_CREATE_EA_XP, *PAFD_SOCK_CREATE_EA_XP;
+
+typedef struct _AFD_SOCK_CREATE_EA {
+	union {
+		FILE_FULL_EA_INFORMATION EaInfo;
+		AFD_SOCK_CREATE_EA_VISTA EaVista;
+		AFD_SOCK_CREATE_EA_XP EaXp;
+		BYTE eabuffer[sizeof(AFD_SOCK_CREATE_EA_XP)];
+	};
 } AFD_SOCK_CREATE_EA, *PAFD_SOCK_CREATE_EA;
 
 typedef struct _AFD_BIND_DATA_NEW {
@@ -232,6 +291,12 @@ extern WINAPI NTSTATUS NtWaitForSingleObject(
 	IN PLARGE_INTEGER Timeout
 );
 
+extern WINAPI VOID RtlGetNtVersionNumbers(
+	DWORD *MajorVersion,
+	DWORD *MinorVersion,
+	DWORD *BuildNumber
+);
+
 extern WINAPI void RtlSetLastWin32ErrorAndNtStatusFromNtStatus(
 	NTSTATUS status
 );
@@ -253,6 +318,9 @@ extern WINAPI BOOLEAN RtlFreeHeap(
 	PVOID HeapBase
 );
 
+DWORD NTSOCK_WINVER[3] = {0, 0, 0};
+
+BOOL AfdVistaOrHigher(void);
 void IncrementStringIntW(WCHAR *wstr, int len);
 NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_INFOW protocolinfo);
 NTSTATUS CheckPointerParameter(const void *p);

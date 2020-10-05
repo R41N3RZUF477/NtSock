@@ -115,6 +115,15 @@ typedef struct _SOCKET_CONTEXT {
 	PVOID Helper;
 } SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 
+typedef struct _SOCKET_CONTEXT_XP {
+    SOCK_SHARED_INFO SharedData;
+    ULONG SizeOfHelperData;
+    ULONG Padding;
+	SOCKADDR LocalAddress;
+	SOCKADDR RemoteAddress;
+	PVOID Helper;
+} SOCKET_CONTEXT_XP, *PSOCKET_CONTEXT_XP;
+
 u_short NtHtons(u_short s);
 struct in_addr NtInetAddr(const char *cp);
 NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize);

@@ -5,6 +5,15 @@
 extern "C" {
 #endif
 
+BOOL AfdVistaOrHigher(void)
+{
+	if(!NTSOCK_WINVER[0])
+	{
+		RtlGetNtVersionNumbers(&NTSOCK_WINVER[0], &NTSOCK_WINVER[1], &NTSOCK_WINVER[2]);
+	}
+	return (NTSOCK_WINVER[0] > 5);
+}
+
 void IncrementStringIntW(WCHAR *wstr, int len)
 {
 	int i, carry;
@@ -257,6 +266,7 @@ SOCKET CreateSocketHandle(int af, int type, int protocol)
 	UNICODE_STRING us;
 	OBJECT_ATTRIBUTES oa;
 	AFD_SOCK_CREATE_EA ea;
+	ULONG easize = 0;
 	IO_STATUS_BLOCK iosb;
 	SOCKET sock = INVALID_SOCKET;
 
@@ -265,22 +275,79 @@ SOCKET CreateSocketHandle(int af, int type, int protocol)
 	us.Buffer = (PWSTR)AFD_DEVICE_PATH;
 	memset(&oa, 0, sizeof(OBJECT_ATTRIBUTES));
 	oa.Length = sizeof(OBJECT_ATTRIBUTES);
-	oa.RootDirectory = NULL;
 	oa.ObjectName = &us;
 	oa.Attributes = OBJ_CASE_INSENSITIVE;
-	oa.SecurityDescriptor = NULL;
-	oa.SecurityQualityOfService = NULL;
 	memset(&ea, 0, sizeof(AFD_SOCK_CREATE_EA));
-	ea.unknown1 = 0x001E0F00;
-	memcpy(&ea.afdopenstr[0], AfdCommand, sizeof(AfdCommand));
-	if(type == SOCK_DGRAM)
+	ea.EaInfo.EaNameLength = sizeof(AfdCommand) - 1;
+	memcpy(&ea.EaVista.afdopenstr[0], AfdCommand, sizeof(AfdCommand));
+	if(AfdVistaOrHigher())
 	{
-		ea.unknown2 = protocol;
+		easize = 0x39;
+		ea.EaInfo.EaValueLength = 0x1E;
+		if(type == SOCK_DGRAM)
+		{
+			ea.EaVista.unknown2 = protocol;
+		}
+		ea.EaVista.iAdressFamily = af;
+		ea.EaVista.iSocketType = type;
+		ea.EaVista.iProtocol = protocol;
 	}
-	ea.iAdressFamily = af;
-	ea.iSocketType = type;
-	ea.iProtocol = protocol;
-	status = NtCreateFile((PHANDLE)&sock, GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE|WRITE_DAC, &oa, &iosb, NULL, 0, FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_OPEN_IF, 0, &ea, 0x39);
+	else
+	{
+		easize = 0x43;
+		ea.EaInfo.EaValueLength = 0x28;
+		switch(af)
+		{
+			case AF_INET:
+				switch(protocol)
+				{
+					case IPPROTO_TCP:
+						ea.EaXp.tdnamesize = sizeof(TCP_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], TCP_DEVICE_PATH, sizeof(TCP_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+					case IPPROTO_UDP:
+						ea.EaXp.tdnamesize = sizeof(UDP_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], UDP_DEVICE_PATH, sizeof(UDP_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+					case IPPROTO_RAW:
+					case IPPROTO_ICMP:
+						ea.EaXp.tdnamesize = sizeof(RAWIP_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], RAWIP_DEVICE_PATH, sizeof(RAWIP_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+					default:
+						ea.EaXp.tdnamesize = sizeof(IP_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], IP_DEVICE_PATH, sizeof(IP_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+				}
+				break;
+			case AF_INET6:
+				switch(protocol)
+				{
+					case IPPROTO_TCP:
+						ea.EaXp.tdnamesize = sizeof(TCP6_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], TCP6_DEVICE_PATH, sizeof(TCP6_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+					case IPPROTO_UDP:
+						ea.EaXp.tdnamesize = sizeof(UDP6_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], UDP6_DEVICE_PATH, sizeof(UDP6_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+					case IPPROTO_RAW:
+					case IPPROTO_ICMPV6:
+						ea.EaXp.tdnamesize = sizeof(RAWIP6_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], RAWIP6_DEVICE_PATH, sizeof(RAWIP6_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+					default:
+						ea.EaXp.tdnamesize = sizeof(IP6_DEVICE_PATH) - sizeof(WCHAR);
+						memcpy(&ea.EaXp.tdname[0], IP6_DEVICE_PATH, sizeof(IP6_DEVICE_PATH) - sizeof(WCHAR));
+						break;
+				}
+				break;
+			default:
+				RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
+				return INVALID_SOCKET;
+		}
+	}
+	status = NtCreateFile((PHANDLE)&sock, GENERIC_READ|GENERIC_WRITE|SYNCHRONIZE|WRITE_DAC, &oa, &iosb, NULL, 0, FILE_SHARE_READ|FILE_SHARE_WRITE, FILE_OPEN_IF, 0, &ea, easize);
 	if(status)
 	{
 		RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
@@ -292,13 +359,19 @@ SOCKET CreateSocketHandle(int af, int type, int protocol)
 ULONG GetSocketContextLength(PSOCKET_CONTEXT sockctx)
 {
 	ULONG paddsize;
+	ULONG ctxsize = 0;
 
 	if(CheckPointerParameter(sockctx))
 	{
 		return 0;
 	}
 	paddsize = (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + ((!sockctx->SharedData.SizeOfLocalAddress) << 4);
-	return sizeof(SOCK_SHARED_INFO)+sizeof(GUID)+8+sizeof(PVOID)+(paddsize << 1);
+	ctxsize = sizeof(SOCK_SHARED_INFO)+8+sizeof(PVOID)+(paddsize << 1);
+	if(AfdVistaOrHigher())
+	{
+		ctxsize += sizeof(GUID);
+	}
+	return ctxsize;
 }
 
 ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockctx)
@@ -306,6 +379,7 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 	NTSTATUS status;
 	WSAPROTOCOL_INFOW wsapi;
 	ULONG sockaddr_paddsize;
+	ULONG ctxsize = 0;
 
 	if(CheckPointerParameter(sockctx))
 	{
@@ -322,7 +396,6 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 		sockctx->SharedData.SizeOfRemoteAddress = wsapi.iMinSockAddr;
 		sockctx->SharedData.SizeOfRecvBuffer = (1 << 16);
 		sockctx->SharedData.SizeOfSendBuffer = (1 << 16);
-		sockctx->SharedData.Flags.HasGUID = 1;
 		sockctx->SharedData.CreateFlags = 1;
 		sockctx->SharedData.CatalogEntryId = wsapi.dwCatalogEntryId;
 		sockctx->SharedData.ServiceFlags1 = wsapi.dwServiceFlags1;
@@ -334,9 +407,20 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 		{
 			sockaddr_paddsize = sizeof(SOCKADDR);
 		}
-		memset(&sockctx->LocalAddress, 0, 2*sockaddr_paddsize);
-		*(int*)(((char*)&sockctx->LocalAddress)+(2*sockaddr_paddsize)) = af;
-		return sizeof(SOCK_SHARED_INFO)+sizeof(GUID)+8+sizeof(PVOID)+(2*sockaddr_paddsize);
+		ctxsize = sizeof(SOCK_SHARED_INFO)+8+sizeof(PVOID)+(2*sockaddr_paddsize);
+		if(AfdVistaOrHigher())
+		{
+			sockctx->SharedData.Flags.HasGUID = 1;
+			memset(&sockctx->LocalAddress, 0, 2*sockaddr_paddsize);
+			*(int*)(((char*)&sockctx->LocalAddress)+(2*sockaddr_paddsize)) = af;
+			ctxsize += sizeof(GUID);
+		}
+		else
+		{
+			memset(&((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress, 0, 2*sockaddr_paddsize);
+			*(int*)(((char*)&((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress)+(2*sockaddr_paddsize)) = af;
+		}
+		return ctxsize;
 	}
 	return 0;
 }
@@ -1451,6 +1535,10 @@ int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen)
 	{
 		return SOCKET_ERROR;
 	}
+	if(CheckPointerParameter(namelen))
+	{
+		return SOCKET_ERROR;
+	}
 	if(CheckSockAddrParameter(name, *namelen, SOCKADDR_NO_AF_OK|SOCKADDR_NO_PORT_OK))
 	{
 		return SOCKET_ERROR;
@@ -1463,8 +1551,15 @@ int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen)
 		status = 0;
 		if(sockctx->SharedData.SizeOfLocalAddress <= *namelen)
 		{
+			if(AfdVistaOrHigher())
+			{
+				memcpy(name, &sockctx->LocalAddress, *namelen);
+			}
+			else
+			{
+				memcpy(name, &((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress, *namelen);
+			}
 			*namelen = sockctx->SharedData.SizeOfLocalAddress;
-			memcpy(name, &sockctx->LocalAddress, *namelen);
 		}
 		else
 		{
@@ -1483,15 +1578,15 @@ int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen)
 	PSOCKET_CONTEXT sockctx;
 	int sa_remote_offset;
 
-	if(sock == INVALID_SOCKET)
+	if(CheckSocketParameter(sock))
 	{
 		return SOCKET_ERROR;
 	}
-	if(!name)
+	if(CheckPointerParameter(namelen))
 	{
 		return SOCKET_ERROR;
 	}
-	if(*namelen < (int)sizeof(struct sockaddr))
+	if(CheckSockAddrParameter(name, *namelen, SOCKADDR_NO_AF_OK|SOCKADDR_NO_PORT_OK))
 	{
 		return SOCKET_ERROR;
 	}
@@ -1503,9 +1598,13 @@ int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen)
 		status = 0;
 		if(sockctx->SharedData.SizeOfRemoteAddress <= *namelen)
 		{
-			*namelen = sockctx->SharedData.SizeOfRemoteAddress;
-			sa_remote_offset = sizeof(SOCK_SHARED_INFO) + sizeof(GUID) + (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
+			sa_remote_offset = sizeof(SOCK_SHARED_INFO) + (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
+			if(AfdVistaOrHigher())
+			{
+				sa_remote_offset += sizeof(GUID);
+			}
 			memcpy(name, &buffer[sa_remote_offset], *namelen);
+			*namelen = sockctx->SharedData.SizeOfRemoteAddress;
 		}
 		else
 		{
@@ -1742,7 +1841,11 @@ int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen)
 			{
 				conlen += sockctx->SharedData.SizeOfRemoteAddress;
 				sockctx->SharedData.State = SocketConnected;
-				sa_remote_offset = sizeof(SOCK_SHARED_INFO) + sizeof(GUID) + (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
+				sa_remote_offset = sizeof(SOCK_SHARED_INFO) + (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
+				if(AfdVistaOrHigher())
+				{
+					sa_remote_offset += sizeof(GUID);
+				}
 				memcpy(&buffer[sa_remote_offset], name, sockctx->SharedData.SizeOfRemoteAddress);
 				aci = (PAFD_CONNECT_INFO_NEW)&condata[0];
 				aci->unknown1 = NULL;
