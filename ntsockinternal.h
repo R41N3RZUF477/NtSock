@@ -318,7 +318,7 @@ extern WINAPI BOOLEAN RtlFreeHeap(
 	PVOID HeapBase
 );
 
-DWORD NTSOCK_WINVER[3] = {0, 0, 0};
+static DWORD NTSOCK_WINVER[3] = {0, 0, 0};
 
 BOOL AfdVistaOrHigher(void);
 void IncrementStringIntW(WCHAR *wstr, int len);

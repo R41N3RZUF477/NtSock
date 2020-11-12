@@ -40,7 +40,6 @@ void IncrementStringIntW(WCHAR *wstr, int len)
 NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_INFOW protocolinfo)
 {
 	NTSTATUS status;
-	BOOL suitable = FALSE;
 	HANDLE key, subkey;
 	WCHAR indexkey[13] = L"000000000000";
 	UNICODE_STRING us, ussub;
@@ -81,8 +80,10 @@ NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_IN
 					break;
 				case SOCK_RDM:
 					protocol = 113;
+					break;
 				case SOCK_SEQPACKET:
 					protocol = IPPROTO_UDP;
+					break;
 				default:
 					protocol = IPPROTO_TCP;
 			}
@@ -119,9 +120,8 @@ NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_IN
 										NtClose(key);
 										return 0;
 									}
-									else if((wsapi->iProtocol == 0) && (!suitable))
+									else if(wsapi->iProtocol == 0)
 									{
-										suitable = TRUE;
 										wsapi->iProtocol = protocol;
 										memcpy(protocolinfo, &kvpi->Data[MAX_PATH], buffersize);
 										return 0;
@@ -169,10 +169,6 @@ NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_IN
 			}
 		}
 		NtClose(key);
-	}
-	if(suitable)
-	{
-		return 0;
 	}
 	return STATUS_NOT_FOUND;
 }
@@ -379,7 +375,7 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 	NTSTATUS status;
 	WSAPROTOCOL_INFOW wsapi;
 	ULONG sockaddr_paddsize;
-	ULONG ctxsize = 0;
+	ULONG ctxsize;
 
 	if(CheckPointerParameter(sockctx))
 	{
@@ -392,8 +388,8 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 		sockctx->SharedData.AddressFamily = wsapi.iAddressFamily;
 		sockctx->SharedData.SocketType = wsapi.iSocketType;
 		sockctx->SharedData.Protocol = wsapi.iProtocol;
-		sockctx->SharedData.SizeOfLocalAddress = wsapi.iMinSockAddr;
-		sockctx->SharedData.SizeOfRemoteAddress = wsapi.iMinSockAddr;
+		sockctx->SharedData.SizeOfLocalAddress = wsapi.iMaxSockAddr;
+		sockctx->SharedData.SizeOfRemoteAddress = wsapi.iMaxSockAddr;
 		sockctx->SharedData.SizeOfRecvBuffer = (1 << 16);
 		sockctx->SharedData.SizeOfSendBuffer = (1 << 16);
 		sockctx->SharedData.CreateFlags = 1;
@@ -402,7 +398,7 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 		sockctx->SharedData.ProviderFlags = wsapi.dwProviderFlags;
 		sockctx->Guid = wsapi.ProviderId;
 		sockctx->SizeOfHelperData = sizeof(PVOID);
-		sockaddr_paddsize = (wsapi.iMinSockAddr & 0x7FFFFFF0) + (((wsapi.iMinSockAddr & 0xF) > 0) << 4);
+		sockaddr_paddsize = (wsapi.iMaxSockAddr & 0x7FFFFFF0) + (((wsapi.iMaxSockAddr & 0xF) > 0) << 4);
 		if(sockaddr_paddsize < sizeof(SOCKADDR))
 		{
 			sockaddr_paddsize = sizeof(SOCKADDR);
@@ -493,50 +489,61 @@ u_short NtHtons(u_short s)
 
 struct in_addr NtInetAddr(const char *cp)
 {
-	int ipbyte = 0, ndot = 0;
-	char *pstr,*ldot = (char*)&cp[-1];
+	int ipbyte = -1, ndot = 0;
+	char *pstr;
 	struct in_addr addr;
+	u_char *paddr;
 
-	addr.S_un.S_addr = INADDR_NONE;
+	addr.s_addr = INADDR_ANY;
+	paddr = (u_char*)&addr.s_addr;
 	if(cp)
 	{
 		for(pstr = (char*)cp; *pstr; ++pstr)
 		{
 			if(*pstr == '.')
 			{
-				if((ldot == pstr-1))
+				if(ipbyte == -1)
 				{
-					addr.S_un.S_addr = INADDR_NONE;
+					addr.s_addr = INADDR_ANY;
 					break;
 				}
-				if(ndot > 3)
-				ldot = pstr;
-				((u_char*)&addr)[ndot++] = (u_char)ipbyte;
-				ipbyte = 0;
-				if(ndot > 3)
+				if(ndot < 4)
+				{
+					paddr[ndot++] = (u_char)ipbyte;
+					ipbyte = -1;
+				}
+				else
 				{
 					break;
 				}
 			}
 			else if((*pstr >= '0') && (*pstr <= '9'))
 			{
+				if(ipbyte == -1)
+				{
+					ipbyte = 0;
+				}
 				ipbyte = (ipbyte * 10) + (*pstr - '0');
 				if(ipbyte > 0xFF)
 				{
-					addr.S_un.S_addr = INADDR_NONE;
+					addr.s_addr = INADDR_ANY;
 					break;
 				}
 				if(!pstr[1])
 				{
-					((u_char*)&addr)[ndot] = (u_char)ipbyte;
+					paddr[ndot] = (u_char)ipbyte;
 				}
 			}
 			else
 			{
-				addr.S_un.S_addr = INADDR_NONE;
+				addr.s_addr = INADDR_ANY;
 				break;
 			}
 		}
+	}
+	if(ndot != 3)
+	{
+		addr.s_addr = INADDR_ANY;
 	}
 	return addr;
 }
@@ -548,7 +555,7 @@ int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LP
 
 SOCKET NtSocket(int af, int type, int protocol)
 {
-	NTSTATUS status;
+	NTSTATUS status = STATUS_CANNOT_MAKE;
 	ULONG len;
 	BYTE buffer[SOCK_CONTEXT_BUF_SIZE];
 	PSOCKET_CONTEXT sockctx;
@@ -1078,6 +1085,7 @@ int NtSelect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, con
 	#ifdef NTSOCK_SELECT_STACKALLOC
 	}
 	#endif
+	pasd->unknown1 = 0;
 	if(timeout)
 	{
 		pasd->Timeout.QuadPart = (((LONGLONG)timeout->tv_sec) * 1000 + ((LONGLONG)timeout->tv_usec)) * -10000;
@@ -1229,9 +1237,101 @@ int NtSelect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, con
 			exceptfds->fd_count = 0;
 		}
 	}
-	else if(status)
+	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	return signals;
+}
+
+int NtPoll(NTPOLLFD *fds, ULONG nfds, int timeout)
+{
+	NTSTATUS status;
+	HANDLE event;
+	IO_STATUS_BLOCK iosb;
+	PVOID heap;
+	PAFD_SELECT_DATA pasd;
+	ULONG buffersize = sizeof(AFD_SELECT_DATA)-sizeof(AFD_SELECT_DATA_ENTRY);
+	unsigned int i, j;
+	int signals = SOCKET_ERROR;
+
+	if(CheckArrayParameter(fds, nfds, 1))
 	{
-		signals = -1;
+		return SOCKET_ERROR;
+	}
+	buffersize += (nfds * sizeof(AFD_SELECT_DATA_ENTRY));
+	#ifdef NTSOCK_SELECT_STACKALLOC
+	if(buffersize <= NTSOCK_SELECT_STACKALLOC)
+	{
+		pasd = (PAFD_SELECT_DATA)alloca(buffersize);
+		memset(pasd, 0, buffersize);
+	}
+	else
+	{
+	#endif
+		if(!RtlGetProcessHeaps(1, &heap))
+		{
+			RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_NOT_FOUND);
+			return SOCKET_ERROR;
+		}
+		pasd = (PAFD_SELECT_DATA)RtlAllocateHeap(heap, HEAP_ZERO_MEMORY, buffersize);
+		if(!pasd)
+		{
+			RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_NO_MEMORY);
+			return SOCKET_ERROR;
+		}
+	#ifdef NTSOCK_SELECT_STACKALLOC
+	}
+	#endif
+	pasd->SocketCount = nfds;
+	pasd->unknown1 = 0;
+	if(timeout < 0)
+	{
+		pasd->Timeout.QuadPart = 0x8000000000000000;
+	}
+	else
+	{
+		pasd->Timeout.QuadPart = ((LONGLONG)timeout) * -10000;
+	}
+	for(i = 0; i < nfds; ++i)
+	{
+		pasd->SockEntry[i].sock = fds[i].fd;
+		pasd->SockEntry[i].mode = (ULONG)fds[i].events;
+		fds[i].revents = 0;
+	}
+	status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+	if(!status)
+	{
+		status = NtDeviceIoControlFile((HANDLE)pasd->SockEntry[0].sock, event, NULL, NULL, &iosb, IOCTL_AFD_SELECT, pasd, buffersize, pasd, buffersize);
+		if(status == STATUS_PENDING)
+		{
+			status = NtWaitForSingleObject(event, TRUE, &pasd->Timeout);
+		}
+		NtClose(event);
+	}
+	if(!status)
+	{
+		signals = (int)pasd->SocketCount;
+		for(i = 0, j = 0; i < signals; ++i)
+		{
+			for(; j < nfds; ++j)
+			{
+				if((pasd->SockEntry[i].sock == fds[j].fd) && (pasd->SockEntry[i].mode & fds[j].events))
+				{
+					fds[j++].revents = (short)pasd->SockEntry[i].mode;
+					break;
+				}
+			}
+		}
+	}
+	#ifdef NTSOCK_SELECT_STACKALLOC
+	if(buffersize > NTSOCK_SELECT_STACKALLOC)
+	{
+	#endif
+		RtlFreeHeap(heap, 0, pasd);
+	#ifdef NTSOCK_SELECT_STACKALLOC
+	}
+	#endif
+	if(status == STATUS_TIMEOUT)
+	{
+		signals = 0;
 	}
 	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	return signals;
@@ -1522,6 +1622,40 @@ NTSTATUS NtIoctlSocketEx(SOCKET sock, ULONG cmd, PVOID inbuffer, ULONG inbuflen,
 	}
 	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
 	return status;
+}
+
+int NtGetSockType(SOCKET sock, int *af, int *type, int *protocol)
+{
+	NTSTATUS status;
+	BYTE buffer[FIELD_OFFSET(SOCK_SHARED_INFO, Protocol)+sizeof(INT)];
+	ULONG sctxlen;
+	PSOCKET_CONTEXT sockctx;
+
+	if(CheckSocketParameter(sock))
+	{
+		return SOCKET_ERROR;
+	}
+	sockctx = (PSOCKET_CONTEXT)&buffer[0];
+	sctxlen = sizeof(buffer);
+	status = GetSocketContext(sock, sockctx, &sctxlen);
+	if((!status) || (status == STATUS_BUFFER_OVERFLOW))
+	{
+		status = 0;
+		if(af)
+		{
+			*af = sockctx->SharedData.AddressFamily;
+		}
+		if(type)
+		{
+			*type = sockctx->SharedData.SocketType;
+		}
+		if(protocol)
+		{
+			*protocol = sockctx->SharedData.Protocol;
+		}
+	}
+	RtlSetLastWin32ErrorAndNtStatusFromNtStatus(status);
+	return -(!!status);
 }
 
 int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen)
@@ -2003,6 +2137,8 @@ int NtShutdown(SOCKET sock, int how)
 
 NTSTATUS NtCloseSocket(SOCKET sock)
 {
+	IO_STATUS_BLOCK iosb;
+	NtCancelIoFile((HANDLE)sock, &iosb);
 	return NtClose((HANDLE)sock);
 }
 

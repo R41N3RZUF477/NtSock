@@ -1,7 +1,9 @@
 #ifndef _NTSOCK_DNS_H_
 #define _NTSOCK_DNS_H_
 
+#define DNS_DEFAULT_PORT 53
 
+#define NTSOCK_DNS_DEFTIMEOUT 2000
 
 #define DNS_CONTROL_RQ 0x0000U
 #define DNS_CONTROL_RS 0x8000U
@@ -28,23 +30,25 @@
 #define NTSOCK_DNS_PREFER_TCP 0x4
 
 #pragma pack(push, 2)
-typedef struct _DNS_HEADER {
+typedef struct _NTSOCK_DNS_HEADER {
 	USHORT Identification;
 	USHORT Control;
 	USHORT QuestionCount;
 	USHORT AnswerCount;
 	USHORT AuthorityCount;
 	USHORT AdditionalCount;
-} DNS_HEADER, *PDNS_HEADER;
+} NTSOCK_DNS_HEADER, *PNTSOCK_DNS_HEADER;
 
-typedef struct _DNS_ANSWER {
+typedef struct _NTSOCK_DNS_ANSWER {
 	USHORT Type;
 	USHORT Class;
 	ULONG Ttl;
 	USHORT DataLength;
-} DNS_ANSWER, *PDNS_ANSWER;
+} NTSOCK_DNS_ANSWER, *PNTSOCK_DNS_ANSWER;
 #pragma pack(pop)
 
+int NtDnsClientByUdpSocket(const char *dns, u_short af, void *ipaddresses, int addrlen, SOCKET sock, const struct sockaddr *dnsserver, int dnssrvlen, const TIMEVAL *timeout);
+int NtDnsClientByTcpSocket(const char *dns, u_short af, void *ipaddresses, int addrlen, SOCKET sock, const TIMEVAL *timeout);
 int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, const struct sockaddr *dnsserver, int dnssrvlen, const TIMEVAL *timeout, int flags);
 int NtSimpleDnsClient(const char *dns, struct sockaddr *addr, int addrlen, const struct sockaddr *dnsserver, int dnssrvlen, int flags);
 

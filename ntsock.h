@@ -15,7 +15,7 @@ extern "C" {
 #define SOCK_CONTEXT_BUF_SIZE (sizeof(SOCK_SHARED_INFO)+sizeof(GUID)+sizeof(PVOID)+8+(2*sizeof(SOCKADDR_STORAGE)))
 #define SOCK_CONTEXT_ADDR_SIZE (sizeof(SOCKADDR_STORAGE))
 #else
-#define SOCK_CONTEXT_BUF_SIZE (sizeof(SOCK_SHARED_INFO)+sizeof(GUID)+sizeof(PVOID)+8+(2*sizeof(SOCKADDR_IN6)))
+#define SOCK_CONTEXT_BUF_SIZE (sizeof(SOCK_SHARED_INFO)+sizeof(GUID)+sizeof(PVOID)+72)
 #define SOCK_CONTEXT_ADDR_SIZE (sizeof(SOCKADDR_IN6))
 #endif
 
@@ -124,6 +124,12 @@ typedef struct _SOCKET_CONTEXT_XP {
 	PVOID Helper;
 } SOCKET_CONTEXT_XP, *PSOCKET_CONTEXT_XP;
 
+typedef struct _NTPOLLFD {
+	SOCKET fd;
+	short  events;
+	short  revents;
+} NTPOLLFD, *PNTPOLLFD;
+
 u_short NtHtons(u_short s);
 struct in_addr NtInetAddr(const char *cp);
 NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize);
@@ -137,12 +143,14 @@ int NtRecv(SOCKET sock, void *buf, int len, int flags);
 int NtSendTo(SOCKET sock, const void *buf, int len, int flags, const struct sockaddr *to, int tolen);
 int NtRecvFrom(SOCKET sock, void *buf, int len, int flags, struct sockaddr *from, int *fromlen);
 int NtSelect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const TIMEVAL *timeout);
+int NtPoll(NTPOLLFD *fds, ULONG nfds, int timeout);
 void NtFDZero(fd_set *fd);
 void NtFDSet(SOCKET s, fd_set *fd);
 int NtFDIsSet(SOCKET s, fd_set *fd);
 int NtSetSockOpt(SOCKET sock, int level, int optname, const char *optval, int optlen);
 int NtGetSockOpt(SOCKET sock, int level, int optname, const char *optval, int *optlen);
 int NtIoctlSocket(SOCKET sock, long cmd, u_long *argp);
+int NtGetSockType(SOCKET sock, int *af, int *type, int *protocol);
 int NtGetSockName(SOCKET sock, struct sockaddr *name, int *namelen);
 int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen);
 int NtListen(SOCKET sock, int backlog);

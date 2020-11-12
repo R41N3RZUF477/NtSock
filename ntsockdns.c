@@ -3,13 +3,16 @@
 
 #include "ntsockdns.h"
 
-#include <stdio.h>
 #include <string.h>
 
 #define MAX_DNS_BUF 512
 #define MAX_EDNS_BUF 2048
 
-int CheckDnsAnswerHeader(PDNS_HEADER dnsheader, USHORT id)
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int CheckDnsAnswerHeader(PNTSOCK_DNS_HEADER dnsheader, USHORT id)
 {
 	if(!dnsheader)
 	{
@@ -58,7 +61,7 @@ int ConvertStringToDnsString(char *str)
 	return (int)(pstr-str);
 }
 
-int CmpDnsString(PDNS_HEADER dnsheader, const char *dnsstr1, const char *dnsstr2)
+int CmpDnsString(PNTSOCK_DNS_HEADER dnsheader, const char *dnsstr1, const char *dnsstr2)
 {
 	char *dnsarray = (char*)dnsheader;
 	USHORT dnsstrp;
@@ -128,20 +131,247 @@ int CmpDnsString(PDNS_HEADER dnsheader, const char *dnsstr1, const char *dnsstr2
 	return memcmp(cmpstr1, cmpstr2, len1);
 }
 
+int InitDnsHeader(PNTSOCK_DNS_HEADER dnsh, int buflen, u_short af, const char *dns, USHORT id, PNTSOCK_DNS_ANSWER *dnsresp)
+{
+	PNTSOCK_DNS_ANSWER dnsr;
+	BYTE *buffer = (BYTE*)dnsh;
+	int slen, mlen;
+
+	*(ULONG*)&buffer[buflen-sizeof(ULONG)] = 0;
+	slen = strlen(dns);
+	if(slen > 255)
+	{
+		return 0;
+	}
+	mlen = sizeof(NTSOCK_DNS_HEADER)+slen+(2*sizeof(USHORT))+2;
+	dnsh->Identification = id;
+	dnsh->Control = NtHtons(DNS_CONTROL_RD|DNS_CONTROL_RQ);
+	dnsh->QuestionCount = NtHtons(1);
+	dnsh->AnswerCount = 0;
+	dnsh->AuthorityCount = 0;
+	dnsh->AdditionalCount = 0;
+	memcpy(&buffer[sizeof(NTSOCK_DNS_HEADER)+1], dns, slen+1);
+	if(ConvertStringToDnsString((char*)&buffer[sizeof(NTSOCK_DNS_HEADER)]) == SOCKET_ERROR)
+	{
+		return 0;
+	}
+	dnsr = (PNTSOCK_DNS_ANSWER)&buffer[sizeof(NTSOCK_DNS_HEADER)+slen+2];
+	dnsr->Type = NtHtons((af == AF_INET6 ? DNS_ANSWER_TYPE_IPV6 : DNS_ANSWER_TYPE_IP));
+	dnsr->Class = NtHtons(DNS_ANSWER_CLASS_INET);
+	*dnsresp = dnsr;
+	return mlen;
+}
+
+int ParseDnsAnswer(PNTSOCK_DNS_HEADER dnsh, int alen, u_short af, void *ipaddresses, int addrlen, int mlen, PNTSOCK_DNS_ANSWER dnsr, USHORT id)
+{
+	char *buffer = (char*)dnsh;
+	USHORT numanswers;
+	int numentry = 0;
+	int anslen = 0;
+	char *ansstr;
+	PNTSOCK_DNS_ANSWER dnsa;
+
+	if(CheckDnsAnswerHeader(dnsh, id))
+	{
+		numanswers = NtHtons(dnsh->AnswerCount);
+		for(; (mlen < alen) && (numanswers > 0); mlen += sizeof(NTSOCK_DNS_ANSWER), --numanswers)
+		{
+			ansstr = &buffer[mlen];
+			if(buffer[mlen] & 0xC0)
+			{
+				mlen += sizeof(USHORT);
+			}
+			else
+			{
+				mlen += (strlen(ansstr) + 1);
+			}
+			dnsa = (PNTSOCK_DNS_ANSWER)&buffer[mlen];
+			if(!CmpDnsString(dnsh, (char*)&buffer[sizeof(NTSOCK_DNS_HEADER)], ansstr))
+			{
+				if((dnsr->Type == dnsa->Type) && (dnsr->Class == dnsa->Class))
+				{
+					if((af == AF_INET) && (NtHtons(dnsr->DataLength >= sizeof(struct in_addr))))
+					{
+						if((anslen + sizeof(struct in_addr)) <= addrlen)
+						{
+							memcpy(&((BYTE*)ipaddresses)[anslen], &buffer[mlen+sizeof(NTSOCK_DNS_ANSWER)], sizeof(struct in_addr));
+							anslen += sizeof(struct in_addr);
+							++numentry;
+						}
+					}
+					else if((af == AF_INET6) && (NtHtons(dnsr->DataLength >= sizeof(struct in6_addr))))
+					{
+						if((anslen + sizeof(struct in6_addr)) <= addrlen)
+						{
+							memcpy(&((BYTE*)ipaddresses)[anslen], &buffer[mlen+sizeof(NTSOCK_DNS_ANSWER)], sizeof(struct in6_addr));
+							anslen += sizeof(struct in6_addr);
+							++numentry;
+						}
+					}
+				}
+			}
+			mlen += NtHtons(dnsa->DataLength);
+		}
+		return numentry;
+	}
+	return SOCKET_ERROR;
+}
+
+int NtDnsClientByUdpSocket(const char *dns, u_short af, void *ipaddresses, int addrlen, SOCKET sock, const struct sockaddr *dnsserver, int dnssrvlen, const TIMEVAL *timeout)
+{
+	fd_set fd;
+	int mlen, alen, sockerr, recvaddrlen;
+	BYTE buffer[MAX_DNS_BUF+sizeof(ULONG)];
+	PNTSOCK_DNS_HEADER dnsh;
+	ULONG id_calc;
+	USHORT id;
+	PNTSOCK_DNS_ANSWER dnsr;
+	SOCKADDR_IN6 recvaddr;
+
+	if(CheckSocketParameter(sock))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckPointerParameter(dns))
+	{
+		return SOCKET_ERROR;
+	}
+	if((af != AF_INET) && (af != AF_INET6))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckArrayParameter(ipaddresses, addrlen, (af == AF_INET6 ? sizeof(struct in6_addr) : sizeof(struct in_addr))))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckSockAddrParameter(dnsserver, dnssrvlen, 0))
+	{
+		return SOCKET_ERROR;
+	}
+
+	id_calc = (ULONG)(af*(ULONG_PTR)dns*(ULONG_PTR)ipaddresses*(ULONG_PTR)dnsserver);
+	id = (USHORT)(((id_calc & 0xFFFF0000) >> 16) + (id_calc & 0xFFFF));
+	dnsh = (PNTSOCK_DNS_HEADER)&buffer[0];
+	mlen = InitDnsHeader(dnsh, MAX_DNS_BUF+sizeof(ULONG), af, dns, id, &dnsr);
+	if(!mlen)
+	{
+		return SOCKET_ERROR;
+	}
+	sockerr = NtSendTo(sock, dnsh, mlen, 0, dnsserver, dnssrvlen);
+	if(sockerr != SOCKET_ERROR)
+	{
+		NtFDZero(&fd);
+		NtFDSet(sock, &fd);
+		sockerr = NtSelect(0, &fd, NULL, NULL, timeout);
+		if(sockerr != SOCKET_ERROR)
+		{
+			sockerr = SOCKET_ERROR;
+			if(NtFDIsSet(sock, &fd))
+			{
+				recvaddrlen = sizeof(SOCKADDR_IN6);
+				memcpy(&recvaddr, &dnsserver, dnssrvlen);
+				sockerr = NtRecvFrom(sock, dnsh, MAX_DNS_BUF, 0, (struct sockaddr*)&recvaddr, &recvaddrlen);
+				if(sockerr != SOCKET_ERROR)
+				{
+					if((dnssrvlen == recvaddrlen) && (dnsserver->sa_family == recvaddr.sin6_family))
+					{
+						if(dnsserver->sa_family == AF_INET)
+						{
+							if((recvaddr.sin6_port == *(USHORT*)&dnsserver->sa_data[0]) && (recvaddr.sin6_flowinfo == *(ULONG*)&dnsserver->sa_data[sizeof(USHORT)]))
+							{
+								alen = sockerr;
+							}
+						}
+						else if(dnsserver->sa_family == AF_INET6)
+						{
+							if((recvaddr.sin6_port == *(USHORT*)&dnsserver->sa_data[0]) && (!memcmp(&dnsserver->sa_data[sizeof(USHORT)+sizeof(ULONG)], &recvaddr.sin6_addr, sizeof(IN6_ADDR))))
+							{
+								alen = sockerr;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if(sockerr == SOCKET_ERROR)
+	{
+		return SOCKET_ERROR;
+	}
+	return ParseDnsAnswer(dnsh, alen, af, ipaddresses, addrlen, mlen, dnsr, id);
+}
+
+int NtDnsClientByTcpSocket(const char *dns, u_short af, void *ipaddresses, int addrlen, SOCKET sock, const TIMEVAL *timeout)
+{
+	fd_set fd;
+	int mlen, alen, sockerr;
+	BYTE buffer[MAX_DNS_BUF+sizeof(ULONG)];
+	PNTSOCK_DNS_HEADER dnsh;
+	ULONG id_calc;
+	USHORT id;
+	PNTSOCK_DNS_ANSWER dnsr;
+
+	if(CheckSocketParameter(sock))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckPointerParameter(dns))
+	{
+		return SOCKET_ERROR;
+	}
+	if((af != AF_INET) && (af != AF_INET6))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckArrayParameter(ipaddresses, addrlen, (af == AF_INET6 ? sizeof(struct in6_addr) : sizeof(struct in_addr))))
+	{
+		return SOCKET_ERROR;
+	}
+
+	id_calc = (ULONG)(af*(ULONG_PTR)dns*(ULONG_PTR)ipaddresses*(ULONG_PTR)sock);
+	id = (USHORT)(((id_calc & 0xFFFF0000) >> 16) + (id_calc & 0xFFFF));
+	dnsh = (PNTSOCK_DNS_HEADER)&buffer[0];
+	mlen = InitDnsHeader(dnsh, MAX_DNS_BUF+sizeof(ULONG), af, dns, id, &dnsr);
+	if(!mlen)
+	{
+		return SOCKET_ERROR;
+	}
+	sockerr = NtSend(sock, dnsh, mlen, 0);
+	if(sockerr != SOCKET_ERROR)
+	{
+		NtFDZero(&fd);
+		NtFDSet(sock, &fd);
+		sockerr = NtSelect(0, &fd, NULL, NULL, timeout);
+		if(sockerr != SOCKET_ERROR)
+		{
+			sockerr = SOCKET_ERROR;
+			if(NtFDIsSet(sock, &fd))
+			{
+				sockerr = NtRecv(sock, dnsh, MAX_DNS_BUF, 0);
+				if(sockerr != SOCKET_ERROR)
+				{
+					alen = sockerr;
+				}
+			}
+		}
+	}
+	if(sockerr == SOCKET_ERROR)
+	{
+		return SOCKET_ERROR;
+	}
+	return ParseDnsAnswer(dnsh, alen, af, ipaddresses, addrlen, mlen, dnsr, id);
+}
+
 int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, const struct sockaddr *dnsserver, int dnssrvlen, const TIMEVAL *timeout, int flags)
 {
 	SOCKET sock;
 	fd_set fd;
-	int slen, mlen, alen, sockerr;
+	int mlen, alen = 0, sockerr;
 	BYTE buffer[MAX_DNS_BUF+sizeof(ULONG)];
-	PDNS_HEADER dnsh;
+	PNTSOCK_DNS_HEADER dnsh;
 	ULONG id_calc;
 	USHORT id;
-	PDNS_ANSWER dnsr, dnsa;
-	USHORT numanswers;
-	int anslen = 0;
-	int numentry = 0;
-	char *ansstr;
+	PNTSOCK_DNS_ANSWER dnsr;
 
 	if(CheckPointerParameter(dns))
 	{
@@ -167,37 +397,22 @@ int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, con
 	{
 		return SOCKET_ERROR;
 	}
-	*(ULONG*)&buffer[MAX_DNS_BUF] = 0;
-	slen = strlen(dns);
-	if(slen > 255)
-	{
-		return SOCKET_ERROR;
-	}
-	mlen = sizeof(DNS_HEADER)+slen+(2*sizeof(USHORT))+2;
+
 	id_calc = (ULONG)(af*(ULONG_PTR)dns*(ULONG_PTR)ipaddresses*(ULONG_PTR)dnsserver);
 	id = (USHORT)(((id_calc & 0xFFFF0000) >> 16) + (id_calc & 0xFFFF));
-	dnsh = (PDNS_HEADER)&buffer[0];
-	dnsh->Identification = id;
-	dnsh->Control = NtHtons(DNS_CONTROL_RD|DNS_CONTROL_RQ);
-	dnsh->QuestionCount = NtHtons(1);
-	dnsh->AnswerCount = 0;
-	dnsh->AuthorityCount = 0;
-	dnsh->AdditionalCount = 0;
-	memcpy(&buffer[sizeof(DNS_HEADER)+1], dns, slen+1);
-	if(ConvertStringToDnsString((char*)&buffer[sizeof(DNS_HEADER)]) == SOCKET_ERROR)
+	dnsh = (PNTSOCK_DNS_HEADER)&buffer[0];
+	mlen = InitDnsHeader(dnsh, MAX_DNS_BUF+sizeof(ULONG), af, dns, id, &dnsr);
+	if(!mlen)
 	{
 		return SOCKET_ERROR;
 	}
-	dnsr = (PDNS_ANSWER)&buffer[sizeof(DNS_HEADER)+slen+2];
-	dnsr->Type = NtHtons((af == AF_INET6 ? DNS_ANSWER_TYPE_IPV6 : DNS_ANSWER_TYPE_IP));
-	dnsr->Class = NtHtons(DNS_ANSWER_CLASS_INET);
 	if((flags & NTSOCK_DNS_PREFER_TCP) || (flags & NTSOCK_DNS_NOUDP))
 	{
-		sock = NtSocket(af, SOCK_STREAM, IPPROTO_TCP);
+		sock = NtSocket(dnsserver->sa_family, SOCK_STREAM, IPPROTO_TCP);
 	}
 	else
 	{
-		sock = NtSocket(af, SOCK_DGRAM, IPPROTO_UDP);
+		sock = NtSocket(dnsserver->sa_family, SOCK_DGRAM, IPPROTO_UDP);
 	}
 	if(sock != INVALID_SOCKET)
 	{
@@ -212,16 +427,13 @@ int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, con
 				sockerr = NtSelect(0, &fd, NULL, NULL, timeout);
 				if(sockerr != SOCKET_ERROR)
 				{
+					sockerr = SOCKET_ERROR;
 					if(NtFDIsSet(sock, &fd))
 					{
 						sockerr = NtRecv(sock, dnsh, MAX_DNS_BUF, 0);
 						if(sockerr != SOCKET_ERROR)
 						{
 							alen = sockerr;
-						}
-						else
-						{
-							sockerr = SOCKET_ERROR;
 						}
 					}
 				}
@@ -238,11 +450,11 @@ int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, con
 	{
 		if(flags & NTSOCK_DNS_PREFER_TCP)
 		{
-			sock = NtSocket(af, SOCK_DGRAM, IPPROTO_UDP);
+			sock = NtSocket(dnsserver->sa_family, SOCK_DGRAM, IPPROTO_UDP);
 		}
 		else
 		{
-			sock = NtSocket(af, SOCK_STREAM, IPPROTO_TCP);
+			sock = NtSocket(dnsserver->sa_family, SOCK_STREAM, IPPROTO_TCP);
 		}
 		if(sock != INVALID_SOCKET)
 		{
@@ -260,6 +472,7 @@ int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, con
 						sockerr = NtRecv(sock, dnsh, MAX_DNS_BUF, 0);
 						if(sockerr != SOCKET_ERROR)
 						{
+							sockerr = SOCKET_ERROR;
 							if(NtFDIsSet(sock, &fd))
 							{
 								alen = sockerr;
@@ -284,50 +497,7 @@ int NtDnsClient(const char *dns, u_short af, void *ipaddresses, int addrlen, con
 	{
 		return SOCKET_ERROR;
 	}
-	if(CheckDnsAnswerHeader(dnsh, id))
-	{
-		numanswers = NtHtons(dnsh->AnswerCount);
-		for(; (mlen < alen) && (numanswers > 0); mlen += sizeof(DNS_ANSWER), --numanswers)
-		{
-			ansstr = (char*)&buffer[mlen];
-			if(buffer[mlen] & 0xC0)
-			{
-				mlen += sizeof(USHORT);
-			}
-			else
-			{
-				mlen += (strlen(ansstr) + 1);
-			}
-			dnsa = (PDNS_ANSWER)&buffer[mlen];
-			if(!CmpDnsString(dnsh, (char*)&buffer[sizeof(DNS_HEADER)], ansstr))
-			{
-				if((dnsr->Type == dnsa->Type) && (dnsr->Class == dnsa->Class))
-				{
-					if((af == AF_INET) && (NtHtons(dnsr->DataLength >= sizeof(struct in_addr))))
-					{
-						if((anslen + sizeof(struct in_addr)) <= addrlen)
-						{
-							memcpy(&((BYTE*)ipaddresses)[anslen], &buffer[mlen+sizeof(DNS_ANSWER)], sizeof(struct in_addr));
-							anslen += sizeof(struct in_addr);
-							++numentry;
-						}
-					}
-					if((af == AF_INET6) && (NtHtons(dnsr->DataLength >= sizeof(struct in6_addr))))
-					{
-						if((anslen + sizeof(struct in6_addr)) <= addrlen)
-						{
-							memcpy(&((BYTE*)ipaddresses)[anslen], &buffer[mlen+sizeof(DNS_ANSWER)], sizeof(struct in6_addr));
-							anslen += sizeof(struct in6_addr);
-							++numentry;
-						}
-					}
-				}
-			}
-			mlen += NtHtons(dnsa->DataLength);
-		}
-		return numentry;
-	}
-	return SOCKET_ERROR;
+	return ParseDnsAnswer(dnsh, alen, af, ipaddresses, addrlen, mlen, dnsr, id);
 }
 
 int NtSimpleDnsClient(const char *dns, struct sockaddr *addr, int addrlen, const struct sockaddr *dnsserver, int dnssrvlen, int flags)
@@ -364,7 +534,7 @@ int NtSimpleDnsClient(const char *dns, struct sockaddr *addr, int addrlen, const
 		return SOCKET_ERROR;
 	}
 	timeout.tv_sec = 0;
-	timeout.tv_usec = 2000;
+	timeout.tv_usec = NTSOCK_DNS_DEFTIMEOUT;
 
 	numips = NtDnsClient(dns, addr->sa_family, sin_addr, sin_addrlen, dnsserver, dnssrvlen, &timeout, flags);
 	if(numips > 0)
@@ -373,3 +543,7 @@ int NtSimpleDnsClient(const char *dns, struct sockaddr *addr, int addrlen, const
 	}
 	return SOCKET_ERROR;
 }
+
+#ifdef __cplusplus
+}
+#endif
