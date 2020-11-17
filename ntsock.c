@@ -556,10 +556,10 @@ struct in_addr NtInetAddrW(WCHAR *cp)
 	int ipbyte = -1, ndot = 0;
 	WCHAR *pstr;
 	struct in_addr addr;
-	WCHAR *paddr;
+	u_char *paddr;
 
 	addr.s_addr = INADDR_ANY;
-	paddr = (WCHAR*)&addr.s_addr;
+	paddr = (u_char*)&addr.s_addr;
 	if(cp)
 	{
 		for(pstr = (WCHAR*)cp; *pstr; ++pstr)
@@ -573,7 +573,7 @@ struct in_addr NtInetAddrW(WCHAR *cp)
 				}
 				if (ndot < 4)
 				{
-					paddr[ndot++] = (WCHAR)ipbyte;
+					paddr[ndot++] = (u_char)ipbyte;
 					ipbyte = -1;
 				}
 				else
@@ -595,7 +595,7 @@ struct in_addr NtInetAddrW(WCHAR *cp)
 				}
 				if(!pstr[1])
 				{
-					paddr[ndot] = (WCHAR)ipbyte;
+					paddr[ndot] = (u_char)ipbyte;
 				}
 			}
 			else
@@ -623,13 +623,13 @@ int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LP
 	ULONG buffersize;
 	PKEY_VALUE_PARTIAL_INFORMATION kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
 	LPWSAPROTOCOL_INFOW wsapi = (LPWSAPROTOCOL_INFOW)&kvpi->Data[MAX_PATH];
-	int i = -1, j;
+	int i = -1, j, protocolwrite = 0;
 
-	if(CheckPointerParameter(lpProtocolBuffer))
+	if(CheckPointerParameter(lpdwBufferLength))
 	{
 		return STATUS_INVALID_PARAMETER;
 	}
-	if(CheckPointerParameter(lpdwBufferLength))
+	if(CheckArrayParameter(lpProtocolBuffer, *lpdwBufferLength, sizeof(WSAPROTOCOL_INFOW)))
 	{
 		return STATUS_INVALID_PARAMETER;
 	}
@@ -652,7 +652,7 @@ int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LP
 		us.MaximumLength = 13 * sizeof(WCHAR);
 		us.Buffer = indexkey;
 		oa.RootDirectory = key;
-		for(i = -1; !status; ++i)
+		for(i = 0; !status; ++i)
 		{
 			IncrementStringIntW(indexkey, 12);
 			status = NtOpenKey(&subkey, KEY_QUERY_VALUE, &oa);
@@ -667,41 +667,54 @@ int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LP
 						{
 							if(lpiProtocols[j] == 0)
 							{
-								NtClose(subkey);
-								continue;
+								j = 0;
+								break;
 							}
 						}
+						if(!j)
+						{
+							NtClose(subkey);
+							continue;
+						}
 					}
-					if(*lpdwBufferLength > sizeof(WSAPROTOCOL_INFOW))
+					if(*lpdwBufferLength >= sizeof(WSAPROTOCOL_INFOW))
 					{
 						*lpdwBufferLength -= sizeof(WSAPROTOCOL_INFOW);
-						memcpy(&lpProtocolBuffer[i+1], wsapi, sizeof(WSAPROTOCOL_INFOW));
+						memcpy(&lpProtocolBuffer[protocolwrite++], wsapi, sizeof(WSAPROTOCOL_INFOW));
 					}
 				}
 				NtClose(subkey);
 			}
 		}
 		NtClose(key);
-		*lpdwBufferLength = (DWORD)(i * sizeof(WSAPROTOCOL_INFOW));
+		*lpdwBufferLength = (DWORD)(protocolwrite * sizeof(WSAPROTOCOL_INFOW));
 	}
-	return i;
+	return i-1;
 }
 
-int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBufferLength)
+int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, LPDWORD lpdwBufferLength)
 {
 	NTSTATUS status;
-	int interfaces = SOCKET_ERROR;
+	int interfaces = SOCKET_ERROR, interfaceswrite = 0;
 	HANDLE key, subkey;
 	UNICODE_STRING us;
 	OBJECT_ATTRIBUTES oa;
 	BYTE buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+0x804];
 	BYTE databuf[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+0x100];
-	PKEY_VALUE_PARTIAL_INFORMATION kvpi;
+	PKEY_VALUE_PARTIAL_INFORMATION kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
 	DWORD ressize = 0, reslen, datalen;
 	WCHAR *bindmulstr, *bindstr, *namesrv;
 	unsigned int i, bindstrlen;
 	NTSOCK_IPV4_INTERFACE_INFO ip4ii;
 
+	if(CheckPointerParameter(lpdwBufferLength))
+	{
+		return SOCKET_ERROR;
+	}
+	if(CheckArrayParameter(lpInterfaceBuffer, *lpdwBufferLength, sizeof(NTSOCK_IPV4_INTERFACE_INFO)))
+	{
+		return SOCKET_ERROR;
+	}
 	us.Length = sizeof(REG_TCPIP_LINKAGE_STR) - sizeof(WCHAR);
 	us.MaximumLength = sizeof(REG_TCPIP_LINKAGE_STR);
 	us.Buffer = REG_TCPIP_LINKAGE_STR;
@@ -717,7 +730,6 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 		us.Length = sizeof(REG_ROUTE_VALUE_STR) - sizeof(WCHAR);
 		us.MaximumLength = sizeof(REG_ROUTE_VALUE_STR);
 		us.Buffer = REG_ROUTE_VALUE_STR;
-		kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
 		status = NtQueryValueKey(key, &us, KeyValuePartialInformation, &buffer[0], sizeof(buffer), &ressize);
 		NtClose(key);
 	}
@@ -729,7 +741,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 		}
 		else
 		{
-			reslen = ressize / sizeof(WCHAR);
+			reslen = (ressize - FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) / sizeof(WCHAR);
 		}
 		us.Length = sizeof(REG_TCPIP_INTERFACES_STR) - sizeof(WCHAR);
 		us.MaximumLength = sizeof(REG_TCPIP_INTERFACES_STR);
@@ -738,33 +750,37 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 		if(!status)
 		{
 			interfaces = 0;
-			bindmulstr = (WCHAR*)&buffer[0];
+			bindmulstr = (WCHAR*)&kvpi->Data[0];
 			bindstr = NULL;
 			kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&databuf[0];
-			for(i = 1; i < reslen; ++i)
+			oa.RootDirectory = key;
+			for(i = 0; i < reslen; ++i)
 			{
-				if(bindmulstr[i-1] == L'"')
+				if(bindmulstr[i] == L'"')
 				{
 					continue;
 				}
 				else if(bindmulstr[i] == L'\0')
 				{
+					if(!i)
+					{
+						break;
+					}
 					if(bindmulstr[i-1] == L'\0')
 					{
 						break;
 					}
 					else
 					{
-						bindstrlen = (unsigned int)((ULONG_PTR)bindmulstr - (ULONG_PTR)bindstr);
-						if (bindmulstr[i-1] == L'"')
+						bindstrlen = (unsigned int)((ULONG_PTR)&bindmulstr[i] - (ULONG_PTR)bindstr);
+						if(bindmulstr[i-1] == L'"')
 						{
 							bindmulstr[i-1] = L'\0';
 							bindstrlen -= sizeof(WCHAR);
 						}
-						us.Length = bindstrlen - (USHORT)sizeof(WCHAR);
-						us.MaximumLength = bindstrlen;
+						us.Length = bindstrlen;
+						us.MaximumLength = bindstrlen + (USHORT)sizeof(WCHAR);
 						us.Buffer = bindstr;
-						oa.RootDirectory = key;
 						status = NtOpenKey(&subkey, KEY_QUERY_VALUE, &oa);
 						if(!status)
 						{
@@ -775,7 +791,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 							us.Buffer = REG_ENABLEDHCP_VALUE_STR;
 							datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(DWORD);
 							status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-							if(!status)
+							if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 							{
 								ip4ii.DhcpEnabled = *(DWORD*)&kvpi->Data[0];
 								if(ip4ii.DhcpEnabled)
@@ -785,7 +801,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DHCPSRV_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.DhcpServer = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -794,7 +810,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DHCPIP_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.IpAddress = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -805,7 +821,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 										us.Buffer = REG_IP_VALUE_STR;
 										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-										if(!status)
+										if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 										{
 											ip4ii.IpAddress = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 										}
@@ -815,7 +831,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DHCPSNMASK_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.SubnetMask = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -826,7 +842,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 										us.Buffer = REG_SNMASK_VALUE_STR;
 										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-										if (!status)
+										if ((!status) || (status == STATUS_BUFFER_OVERFLOW))
 										{
 											ip4ii.SubnetMask = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 										}
@@ -836,7 +852,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DHCPDEFGW_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.DefaultGateway = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -847,7 +863,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 										us.Buffer = REG_DEFGW_VALUE_STR;
 										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-										if (!status)
+										if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 										{
 											ip4ii.DefaultGateway = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 										}
@@ -857,7 +873,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DHCPNAMESRV_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										namesrv = (WCHAR*)&kvpi->Data[0];
 										ip4ii.NameServer = NtInetAddrW(namesrv);
@@ -877,7 +893,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 										us.Buffer = REG_NAMESRV_VALUE_STR;
 										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (32 * sizeof(WCHAR));
 										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-										if(!status)
+										if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 										{
 											namesrv = (WCHAR*)&kvpi->Data[0];
 											ip4ii.NameServer = NtInetAddrW(namesrv);
@@ -897,7 +913,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DHCPDOMAIN_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (127 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										memcpy(&ip4ii.Domain[0], &kvpi->Data[0], (kvpi->DataLength > (127 * sizeof(WCHAR))) ? 127 * sizeof(WCHAR) : kvpi->DataLength);
 									}
@@ -922,7 +938,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_IP_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if(!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.IpAddress = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -931,7 +947,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_SNMASK_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if (!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.SubnetMask = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -940,7 +956,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DEFGW_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if (!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										ip4ii.DefaultGateway = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
 									}
@@ -949,7 +965,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_NAMESRV_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if (!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										namesrv = (WCHAR*)&kvpi->Data[0];
 										ip4ii.NameServer = NtInetAddrW(namesrv);
@@ -968,17 +984,17 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 									us.Buffer = REG_DOMAIN_VALUE_STR;
 									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (127 * sizeof(WCHAR));
 									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
-									if (!status)
+									if((!status) || (status == STATUS_BUFFER_OVERFLOW))
 									{
 										memcpy(&ip4ii.Domain[0], &kvpi->Data[0], (kvpi->DataLength > (127 * sizeof(WCHAR))) ? 127 * sizeof(WCHAR) : kvpi->DataLength);
 									}
 								}
 							}
 							NtClose(subkey);
-							if((ip4ii.DhcpEnabled != (DWORD)-1) && (dwBufferLength >= sizeof(NTSOCK_IPV4_INTERFACE_INFO)))
+							if((ip4ii.DhcpEnabled != (DWORD)-1) && (*lpdwBufferLength >= sizeof(NTSOCK_IPV4_INTERFACE_INFO)))
 							{
-								dwBufferLength -= sizeof(NTSOCK_IPV4_INTERFACE_INFO);
-								memcpy(&lpInterfaceBuffer[interfaces], &ip4ii, sizeof(NTSOCK_IPV4_INTERFACE_INFO));
+								*lpdwBufferLength -= sizeof(NTSOCK_IPV4_INTERFACE_INFO);
+								memcpy(&lpInterfaceBuffer[interfaceswrite++], &ip4ii, sizeof(NTSOCK_IPV4_INTERFACE_INFO));
 							}
 						}
 						bindstr = NULL;
@@ -990,6 +1006,7 @@ int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBuf
 				}
 			}
 			NtClose(key);
+			*lpdwBufferLength = (DWORD)interfaceswrite * sizeof(NTSOCK_IPV4_INTERFACE_INFO);
 		}
 	}
 	return interfaces;

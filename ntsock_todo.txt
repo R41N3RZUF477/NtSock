@@ -29,7 +29,7 @@
 [+] gethostname()
 [+] getdomainname()
 [+] WSAEnumProtocols()
-[+] GetAdaptersAddresses() (IPv4)
+[/] GetAdaptersAddresses() (IPv4)
 [+] listen()
 [+] accept()
 

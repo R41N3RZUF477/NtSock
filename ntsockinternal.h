@@ -95,7 +95,7 @@ typedef struct _FILE_FULL_EA_INFORMATION {
 #define REG_TCPIP_LINKAGE_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Linkage"
 #define REG_ROUTE_VALUE_STR L"Route"
 
-#define REG_TCPIP_INTERFACES_STR L"Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces"
+#define REG_TCPIP_INTERFACES_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces"
 #define REG_ENABLEDHCP_VALUE_STR L"EnableDHCP"
 #define REG_DHCPIP_VALUE_STR L"DhcpIPAddress"
 #define REG_IP_VALUE_STR L"IPAddress"

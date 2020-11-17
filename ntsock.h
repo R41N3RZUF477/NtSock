@@ -147,9 +147,11 @@ typedef struct _NTSOCK_IPV4_INTERFACE_INFO {
 
 u_short NtHtons(u_short s);
 struct in_addr NtInetAddr(const char *cp);
+struct in_addr NtInetAddrW(WCHAR *cp);
 NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize);
 NTSTATUS SetSocketContext(SOCKET sock, const PSOCKET_CONTEXT sockctx, ULONG ctxsize);
 int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LPDWORD lpdwBufferLength);
+int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, LPDWORD lpdwBufferLength);
 SOCKET NtSocket(int af, int type, int protocol);
 int NtBind(SOCKET sock, const struct sockaddr *addr, int addrlen);
 int NtAutoBind(SOCKET sock, u_short port);
