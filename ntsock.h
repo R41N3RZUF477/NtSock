@@ -1,7 +1,11 @@
 #ifndef _NTSOCK_H_
 #define _NTSOCK_H_
 
+#ifdef _MSC_VER
+#include <winternl.h>
+#else
 #include <ntstatus.h>
+#endif
 #include <winsock2.h>
 #include <ws2ipdef.h>
 #include <ws2tcpip.h>
@@ -130,6 +134,17 @@ typedef struct _NTPOLLFD {
 	short  revents;
 } NTPOLLFD, *PNTPOLLFD;
 
+typedef struct _NTSOCK_IPV4_INTERFACE_INFO {
+	DWORD DhcpEnabled;
+	struct in_addr DhcpServer;
+	struct in_addr IpAddress;
+	struct in_addr SubnetMask;
+	struct in_addr DefaultGateway;
+	struct in_addr NameServer;
+	struct in_addr NameServer2;
+	WCHAR Domain[0x80];
+} NTSOCK_IPV4_INTERFACE_INFO, *PNTSOCK_IPV4_INTERFACE_INFO;
+
 u_short NtHtons(u_short s);
 struct in_addr NtInetAddr(const char *cp);
 NTSTATUS GetSocketContext(SOCKET sock, PSOCKET_CONTEXT sockctx, PULONG ctxsize);
@@ -160,6 +175,7 @@ int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen);
 int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen);
 int NtDisconnect(SOCKET sock, DWORD flags);
 int NtShutdown(SOCKET sock, int how);
+NTSTATUS NtCancelIoSocket(SOCKET sock, BOOL all);
 NTSTATUS NtCloseSocket(SOCKET sock);
 int NtGetHostname(char *name,int namelen);
 int NtGetDomainName(char *name,int namelen);

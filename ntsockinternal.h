@@ -1,11 +1,19 @@
 #ifndef _NTSOCK_INTERNAL_H_
 #define _NTSOCK_INTERNAL_H_
 
+#ifdef _MSC_VER
+#include <winternl.h>
+#else
 #include <ntstatus.h>
+#endif
 #include <winsock2.h>
 #include <ws2ipdef.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+
+#ifdef _MSC_VER
+#pragma comment(lib, "ntdll.lib")
+#endif
 
 #include <string.h>
 #ifdef NTSOCK_SELECT_STACKALLOC
@@ -20,11 +28,28 @@
 extern "C" {
 #endif
 
+#ifndef __UNICODE_STRING_DEFINED
+#define __UNICODE_STRING_DEFINED
 typedef struct _UNICODE_STRING {
 	USHORT Length;
 	USHORT MaximumLength;
 	PWSTR  Buffer;
 } UNICODE_STRING, *PUNICODE_STRING;
+#endif
+
+#ifndef __STRING_DEFINED
+#define __STRING_DEFINED
+typedef struct _STRING {
+	USHORT Length;
+	USHORT MaximumLength;
+	PCHAR  Buffer;
+} STRING, *PSTRING;
+typedef struct _ANSI_STRING {
+	USHORT Length;
+	USHORT MaximumLength;
+	PCHAR  Buffer;
+} ANSI_STRING, *PANSI_STRING;
+#endif
 
 typedef struct _FILE_FULL_EA_INFORMATION {
 	ULONG  NextEntryOffset;
@@ -52,6 +77,10 @@ typedef struct _FILE_FULL_EA_INFORMATION {
 #define OBJ_CASE_INSENSITIVE 0x00000040L
 #endif
 
+#ifndef FILE_OPEN_IF
+#define FILE_OPEN_IF 0x00000003
+#endif
+
 #ifdef _WIN64
 #define REG_PROTOCOL_ENUM_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\WinSock2\\Parameters\\Protocol_Catalog9\\Catalog_Entries64"
 #else
@@ -62,6 +91,22 @@ typedef struct _FILE_FULL_EA_INFORMATION {
 #define REG_TCPIP_PARAMETER_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters"
 #define REG_HOSTNAME_VALUE_STR L"Hostname"
 #define REG_DOMAIN_VALUE_STR L"Domain"
+
+#define REG_TCPIP_LINKAGE_STR L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Linkage"
+#define REG_ROUTE_VALUE_STR L"Route"
+
+#define REG_TCPIP_INTERFACES_STR L"Registry\\Machine\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces"
+#define REG_ENABLEDHCP_VALUE_STR L"EnableDHCP"
+#define REG_DHCPIP_VALUE_STR L"DhcpIPAddress"
+#define REG_IP_VALUE_STR L"IPAddress"
+#define REG_DHCPDOMAIN_VALUE_STR L"DhcpDomain"
+#define REG_DHCPNAMESRV_VALUE_STR L"DhcpNameServer"
+#define REG_NAMESRV_VALUE_STR L"NameServer"
+#define REG_DHCPSNMASK_VALUE_STR L"DhcpSubnetMask"
+#define REG_SNMASK_VALUE_STR L"SubnetMask"
+#define REG_DHCPSRV_VALUE_STR L"DhcpServer"
+#define REG_DHCPDEFGW_VALUE_STR L"DhcpDefaultGateway"
+#define REG_DEFGW_VALUE_STR L"DefaultGateway"
 
 #define SOCKADDR_NULL_OK    0x1
 #define SOCKADDR_NO_AF_OK   0x2
@@ -83,6 +128,9 @@ typedef struct _FILE_FULL_EA_INFORMATION {
 #define AFD_SELECT_FILTER_WRITE  0x4
 #define AFD_SELECT_FILTER_EXCEPT 0x102
 
+#define NTDLL_STR L"ntdll.dll"
+#define NTCANCELIOFILEEX_STR "NtCancelIoFileEx"
+
 typedef enum _EVENT_TYPE {
 	NotificationEvent,
 	SynchronizationEvent
@@ -98,6 +146,8 @@ typedef enum _KEY_VALUE_INFORMATION_CLASS {
 	MaxKeyValueInfoClass
 } KEY_VALUE_INFORMATION_CLASS;
 
+#ifndef __OBJECT_ATTRIBUTES_DEFINED
+#define __OBJECT_ATTRIBUTES_DEFINED
 typedef struct _OBJECT_ATTRIBUTES {
 	ULONG           Length;
 	HANDLE          RootDirectory;
@@ -106,6 +156,7 @@ typedef struct _OBJECT_ATTRIBUTES {
 	PVOID           SecurityDescriptor;
 	PVOID           SecurityQualityOfService;
 } OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;
+#endif
 
 typedef struct _IO_STATUS_BLOCK {
   union {
@@ -169,8 +220,8 @@ typedef struct _AFD_BIND_DATA_NEW {
 } AFD_BIND_DATA_NEW, *PAFD_BIND_DATA_NEW;
 
  typedef struct _AFD_RECEIVED_ACCEPT_DATA_NEW {
-     ULONG               SequenceNumber;
-     struct sockaddr           Address;
+     ULONG SequenceNumber;
+     struct sockaddr Address;
  } AFD_RECEIVED_ACCEPT_DATA_NEW, *PAFD_RECEIVED_ACCEPT_DATA_NEW;
 
 typedef struct _AFD_CONNECT_INFO_NEW {
@@ -226,13 +277,13 @@ typedef struct _KEY_VALUE_PARTIAL_INFORMATION {
 	UCHAR Data[1];
 } KEY_VALUE_PARTIAL_INFORMATION, *PKEY_VALUE_PARTIAL_INFORMATION;
 
-extern WINAPI NTSTATUS NtOpenKey(
+extern __declspec(dllimport) NTSTATUS WINAPI NtOpenKey(
 	PHANDLE KeyHandle,
 	ACCESS_MASK DesiredAccess,
 	POBJECT_ATTRIBUTES ObjectAttributes
 );
 
-extern WINAPI NTSTATUS NtQueryValueKey(
+extern __declspec(dllimport) NTSTATUS WINAPI NtQueryValueKey(
 	HANDLE KeyHandle,
 	PUNICODE_STRING ValueName,
 	KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
@@ -241,7 +292,7 @@ extern WINAPI NTSTATUS NtQueryValueKey(
 	PULONG ResultLength
 );
 
-extern WINAPI NTSTATUS NtCreateFile(
+extern __declspec(dllimport) NTSTATUS WINAPI NtCreateFile(
 	PHANDLE FileHandle,
 	ACCESS_MASK DesiredAccess,
 	POBJECT_ATTRIBUTES ObjectAttributes,
@@ -255,7 +306,7 @@ extern WINAPI NTSTATUS NtCreateFile(
 	ULONG EaLength
 );
 
-extern WINAPI NTSTATUS NtCreateEvent(
+extern __declspec(dllimport) NTSTATUS WINAPI NtCreateEvent(
 	PHANDLE EventHandle,
 	ACCESS_MASK DesiredAccess,
 	POBJECT_ATTRIBUTES ObjectAttributes,
@@ -263,11 +314,11 @@ extern WINAPI NTSTATUS NtCreateEvent(
 	BOOLEAN InitialState
 );
 
-extern WINAPI NTSTATUS NtClose(
+extern __declspec(dllimport) NTSTATUS WINAPI NtClose(
 	HANDLE Handle
 );
 
-extern WINAPI NTSTATUS NtDeviceIoControlFile(
+extern __declspec(dllimport) NTSTATUS WINAPI NtDeviceIoControlFile(
 	HANDLE FileHandle,
 	HANDLE Event,
 	PVOID ApcRoutine,
@@ -280,45 +331,57 @@ extern WINAPI NTSTATUS NtDeviceIoControlFile(
 	ULONG OutputBufferLength
 );
 
-extern WINAPI NTSTATUS NtCancelIoFile(
+extern __declspec(dllimport) NTSTATUS WINAPI NtCancelIoFile(
 	HANDLE FileHandle,
 	PIO_STATUS_BLOCK IoStatusBlock
 );
 
-extern WINAPI NTSTATUS NtWaitForSingleObject(
+extern __declspec(dllimport) NTSTATUS WINAPI NtWaitForSingleObject(
 	IN HANDLE Handle,
 	IN BOOLEAN Alertable,
 	IN PLARGE_INTEGER Timeout
 );
 
-extern WINAPI VOID RtlGetNtVersionNumbers(
+extern __declspec(dllimport) VOID WINAPI RtlGetNtVersionNumbers(
 	DWORD *MajorVersion,
 	DWORD *MinorVersion,
 	DWORD *BuildNumber
 );
 
-extern WINAPI void RtlSetLastWin32ErrorAndNtStatusFromNtStatus(
+extern __declspec(dllimport) void WINAPI RtlSetLastWin32ErrorAndNtStatusFromNtStatus(
 	NTSTATUS status
 );
 
-extern WINAPI ULONG RtlGetProcessHeaps(
+extern __declspec(dllimport) ULONG WINAPI RtlGetProcessHeaps(
 	ULONG MaxNumberOfHeaps,
 	PVOID *HeapArray
 );
 
-extern WINAPI PVOID RtlAllocateHeap(
+extern __declspec(dllimport) PVOID WINAPI RtlAllocateHeap(
 	PVOID HeapHandle,
 	ULONG Flags,
 	SIZE_T Size
 );
 
-extern WINAPI BOOLEAN RtlFreeHeap(
+extern __declspec(dllimport) BOOLEAN WINAPI RtlFreeHeap(
 	PVOID HeapHandle,
 	ULONG Flags,
 	PVOID HeapBase
 );
 
-static DWORD NTSOCK_WINVER[3] = {0, 0, 0};
+extern __declspec(dllimport) NTSTATUS WINAPI LdrGetDllHandle(
+	PWORD pwPath,
+	PVOID Unused,
+	PUNICODE_STRING ModuleFileName,
+	PHANDLE ModuleHandle
+);
+
+extern __declspec(dllimport) NTSTATUS WINAPI LdrGetProcedureAddress(
+	HANDLE ModuleHandle,
+	PANSI_STRING FunctionName,
+	WORD Oridinal,
+	PVOID *FunctionAddress
+);
 
 BOOL AfdVistaOrHigher(void);
 void IncrementStringIntW(WCHAR *wstr, int len);
@@ -330,6 +393,19 @@ NTSTATUS CheckSockAddrParameter(const struct sockaddr *addr, int len, ULONG flag
 SOCKET CreateSocketHandle(int af, int type, int protocol);
 ULONG GetSocketContextLength(PSOCKET_CONTEXT sockctx);
 ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockctx);
+
+#ifndef STATUS_BUFFER_OVERFLOW
+#define STATUS_BUFFER_OVERFLOW 0x80000005
+#endif
+#ifndef STATUS_BUFFER_TOO_SMALL
+#define STATUS_BUFFER_TOO_SMALL 0xC0000023
+#endif
+#ifndef STATUS_NOT_FOUND
+#define STATUS_NOT_FOUND 0xC0000225
+#endif
+#ifndef STATUS_CANNOT_MAKE
+#define STATUS_CANNOT_MAKE 0xC00002EA
+#endif
 
 #ifdef __cplusplus
 }

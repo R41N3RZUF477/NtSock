@@ -8,7 +8,7 @@
 
 [+] shutdown()
 [/] setsockopt() (SOL_SOCKET)
-[-] getsockopt() (SOL_SOCKET)
+[/] getsockopt() (SOL_SOCKET)
 [+] getsockname()
 [+] getpeername()
 [+] connect()
@@ -23,24 +23,26 @@
 [+] DisconnectEx()
 [+] ConnectEx()
 [+] AcceptEx()
+[-] TransferFile()
+[-] TransferPacket()
 
 [+] gethostname()
 [+] getdomainname()
-[-] WSAEnumProtocols()
-[-] GetAdaptersAddresses() (IPv4)
+[+] WSAEnumProtocols()
+[+] GetAdaptersAddresses() (IPv4)
 [+] listen()
 [+] accept()
 
-[-] CancelIo()
+[+] CancelIo()
 [?] accept pending
 [?] reject
-[-] poll()
+[+] poll()
 
 [-] Nonblocking Socket
-[-] XP/2000 Support
+[/] XP/2000 Support
 [-] NtSockEx Functions
 
 [-] ICMP Support
 [-] Raw Socket Support
-[-] SOCKS4/5 Proxy Client
+[+] SOCKS4/5 Proxy Client
 [-] Proxy Aware Socket

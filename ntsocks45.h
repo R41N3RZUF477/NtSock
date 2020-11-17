@@ -49,13 +49,7 @@ typedef struct _NTSOCK_SOCKS4_REQUEST {
 	BYTE Command;
 	USHORT Port;
 	struct in_addr Ip;
-	union {
-		struct {
-			BYTE Auth[NTSOCKS_MAX_STR_LEN];
-			BYTE AuthEnd;
-		};
-		BYTE End;
-	};
+	BYTE Auth[NTSOCKS_MAX_STR_LEN + 1];
 } NTSOCK_SOCKS4_REQUEST, *PNTSOCK_SOCKS4_REQUEST;
 
 typedef struct _NTSOCK_SOCKS4_ANSWER {

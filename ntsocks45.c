@@ -32,10 +32,10 @@ int NtSocks4ClientByTcpSocket(SOCKET sock, struct in_addr *ip, u_short port, u_s
 
 	reqlen = 9;
 	s4r.Version = SOCKS4_VERSION;
-	s4r.Command = reqcommand;
+	s4r.Command = (BYTE)reqcommand;
 	s4r.Port = NtHtons(port);
 	s4r.Ip.s_addr = ip->s_addr;
-	s4r.End = 0;
+	s4r.Auth[0] = 0;
 	if(userid)
 	{
 		if(useridlen > NTSOCKS_MAX_STR_LEN)
@@ -213,12 +213,12 @@ int NtSocks5ClientByTcpSocket(SOCKET sock, u_int addrtype, void *addr, int addrl
 						}
 						memset(&s5aupl, 0, sizeof(NTSOCK_SOCKS5_AUTH_UP_LOGIN));
 						s5aupl.Version = SOCKS5_AUTH_UP_VERSION;
-						userlen = strlen(username);
+						userlen = (int)strlen(username);
 						if(userlen > NTSOCKS_MAX_STR_LEN)
 						{
 							userlen = NTSOCKS_MAX_STR_LEN;
 						}
-						passlen = strlen(password);
+						passlen = (int)strlen(password);
 						if(passlen > NTSOCKS_MAX_STR_LEN)
 						{
 							passlen = NTSOCKS_MAX_STR_LEN;
@@ -265,7 +265,7 @@ int NtSocks5ClientByTcpSocket(SOCKET sock, u_int addrtype, void *addr, int addrl
 					{
 						s5rlen = 6 + addrlen;
 						s5r.Version = SOCKS5_VERSION;
-						s5r.Command = reqcommand;
+						s5r.Command = (BYTE)reqcommand;
 						s5r.Reserved = 0;
 						s5r.AddrType = addrtype;
 						port = NtHtons(port);

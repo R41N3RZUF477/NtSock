@@ -5,6 +5,8 @@
 extern "C" {
 #endif
 
+static DWORD NTSOCK_WINVER[3] = {0, 0, 0};
+
 BOOL AfdVistaOrHigher(void)
 {
 	if(!NTSOCK_WINVER[0])
@@ -49,7 +51,7 @@ NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_IN
 	PKEY_VALUE_PARTIAL_INFORMATION kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
 	LPWSAPROTOCOL_INFOW wsapi = (LPWSAPROTOCOL_INFOW)&kvpi->Data[MAX_PATH];
 
-	if(!protocolinfo)
+	if(CheckPointerParameter(protocolinfo))
 	{
 		return STATUS_INVALID_PARAMETER;
 	}
@@ -105,7 +107,7 @@ NTSTATUS NtGetProtocolForSocket(int af, int type, int protocol, LPWSAPROTOCOL_IN
 				if(!status)
 				{
 					buffersize = kvpi->DataLength - MAX_PATH - (sizeof(WCHAR) * (WSAPROTOCOL_LEN+1));
-					if(buffersize >= FIELD_OFFSET(WSAPROTOCOL_INFOW, szProtocol))
+					if(buffersize >= (ULONG)FIELD_OFFSET(WSAPROTOCOL_INFOW, szProtocol))
 					{
 						if(wsapi->ProtocolChain.ChainLen == 1)
 						{
@@ -355,14 +357,14 @@ SOCKET CreateSocketHandle(int af, int type, int protocol)
 ULONG GetSocketContextLength(PSOCKET_CONTEXT sockctx)
 {
 	ULONG paddsize;
-	ULONG ctxsize = 0;
+	ULONG ctxsize;
 
 	if(CheckPointerParameter(sockctx))
 	{
 		return 0;
 	}
-	paddsize = (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + ((!sockctx->SharedData.SizeOfLocalAddress) << 4);
-	ctxsize = sizeof(SOCK_SHARED_INFO)+8+sizeof(PVOID)+(paddsize << 1);
+	paddsize = (sockctx->SharedData.SizeOfLocalAddress & 0xF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + ((!sockctx->SharedData.SizeOfLocalAddress) << 4);
+	ctxsize = sizeof(SOCK_SHARED_INFO)+8+sizeof(PVOID)+(paddsize * 2);
 	if(AfdVistaOrHigher())
 	{
 		ctxsize += sizeof(GUID);
@@ -374,7 +376,7 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 {
 	NTSTATUS status;
 	WSAPROTOCOL_INFOW wsapi;
-	ULONG sockaddr_paddsize;
+	ULONG sockaddr_paddsize, sockaddr_2paddsize;
 	ULONG ctxsize;
 
 	if(CheckPointerParameter(sockctx))
@@ -398,23 +400,24 @@ ULONG CreateSocketContext(int af, int type, int protocol, PSOCKET_CONTEXT sockct
 		sockctx->SharedData.ProviderFlags = wsapi.dwProviderFlags;
 		sockctx->Guid = wsapi.ProviderId;
 		sockctx->SizeOfHelperData = sizeof(PVOID);
-		sockaddr_paddsize = (wsapi.iMaxSockAddr & 0x7FFFFFF0) + (((wsapi.iMaxSockAddr & 0xF) > 0) << 4);
+		sockaddr_paddsize = (wsapi.iMaxSockAddr & 0xF0) + (((wsapi.iMaxSockAddr & 0xF) > 0) << 4);
 		if(sockaddr_paddsize < sizeof(SOCKADDR))
 		{
 			sockaddr_paddsize = sizeof(SOCKADDR);
 		}
-		ctxsize = sizeof(SOCK_SHARED_INFO)+8+sizeof(PVOID)+(2*sockaddr_paddsize);
+		sockaddr_2paddsize = sockaddr_paddsize * 2;
+		ctxsize = sizeof(SOCK_SHARED_INFO)+8+sizeof(PVOID)+sockaddr_2paddsize;
 		if(AfdVistaOrHigher())
 		{
 			sockctx->SharedData.Flags.HasGUID = 1;
-			memset(&sockctx->LocalAddress, 0, 2*sockaddr_paddsize);
-			*(int*)(((char*)&sockctx->LocalAddress)+(2*sockaddr_paddsize)) = af;
+			memset(&sockctx->LocalAddress, 0, sockaddr_2paddsize);
+			*(int*)(((char*)&sockctx->LocalAddress)+sockaddr_2paddsize) = af;
 			ctxsize += sizeof(GUID);
 		}
 		else
 		{
-			memset(&((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress, 0, 2*sockaddr_paddsize);
-			*(int*)(((char*)&((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress)+(2*sockaddr_paddsize)) = af;
+			memset(&((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress, 0, sockaddr_2paddsize);
+			*(int*)(((char*)&((PSOCKET_CONTEXT_XP)sockctx)->LocalAddress)+sockaddr_2paddsize) = af;
 		}
 		return ctxsize;
 	}
@@ -548,9 +551,448 @@ struct in_addr NtInetAddr(const char *cp)
 	return addr;
 }
 
+struct in_addr NtInetAddrW(WCHAR *cp)
+{
+	int ipbyte = -1, ndot = 0;
+	WCHAR *pstr;
+	struct in_addr addr;
+	WCHAR *paddr;
+
+	addr.s_addr = INADDR_ANY;
+	paddr = (WCHAR*)&addr.s_addr;
+	if(cp)
+	{
+		for(pstr = (WCHAR*)cp; *pstr; ++pstr)
+		{
+			if(*pstr == L'.')
+			{
+				if(ipbyte == -1)
+				{
+					addr.s_addr = INADDR_ANY;
+					break;
+				}
+				if (ndot < 4)
+				{
+					paddr[ndot++] = (WCHAR)ipbyte;
+					ipbyte = -1;
+				}
+				else
+				{
+					break;
+				}
+			}
+			else if((*pstr >= L'0') && (*pstr <= L'9'))
+			{
+				if(ipbyte == -1)
+				{
+					ipbyte = 0;
+				}
+				ipbyte = (ipbyte * 10) + (*pstr - L'0');
+				if(ipbyte > 0xFF)
+				{
+					addr.s_addr = INADDR_ANY;
+					break;
+				}
+				if(!pstr[1])
+				{
+					paddr[ndot] = (WCHAR)ipbyte;
+				}
+			}
+			else
+			{
+				addr.s_addr = INADDR_ANY;
+				break;
+			}
+		}
+	}
+	if(ndot != 3)
+	{
+		addr.s_addr = INADDR_ANY;
+	}
+	return addr;
+}
+
 int NtEnumProtocols(LPINT lpiProtocols, LPWSAPROTOCOL_INFOW lpProtocolBuffer, LPDWORD lpdwBufferLength)
 {
-	return SOCKET_ERROR;
+	NTSTATUS status;
+	HANDLE key, subkey;
+	WCHAR indexkey[13] = L"000000000000";
+	UNICODE_STRING us, ussub;
+	OBJECT_ATTRIBUTES oa;
+	BYTE buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+MAX_PATH+sizeof(WSAPROTOCOL_INFOW)];
+	ULONG buffersize;
+	PKEY_VALUE_PARTIAL_INFORMATION kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
+	LPWSAPROTOCOL_INFOW wsapi = (LPWSAPROTOCOL_INFOW)&kvpi->Data[MAX_PATH];
+	int i = -1, j;
+
+	if(CheckPointerParameter(lpProtocolBuffer))
+	{
+		return STATUS_INVALID_PARAMETER;
+	}
+	if(CheckPointerParameter(lpdwBufferLength))
+	{
+		return STATUS_INVALID_PARAMETER;
+	}
+	us.Length = sizeof(REG_PROTOCOL_ENUM_STR) - sizeof(WCHAR);
+	us.MaximumLength = sizeof(REG_PROTOCOL_ENUM_STR);
+	us.Buffer = (PWSTR)REG_PROTOCOL_ENUM_STR;
+	oa.Length = sizeof(OBJECT_ATTRIBUTES);
+	oa.RootDirectory = NULL;
+	oa.SecurityDescriptor = NULL;
+	oa.SecurityQualityOfService = NULL;
+	oa.Attributes = OBJ_CASE_INSENSITIVE;
+	oa.ObjectName = &us;
+	status = NtOpenKey(&key, KEY_QUERY_VALUE, &oa);
+	if(!status)
+	{
+		ussub.Length = sizeof(REG_PROTOCOL_VALUE_STR) - sizeof(WCHAR);
+		ussub.MaximumLength = sizeof(REG_PROTOCOL_VALUE_STR);
+		ussub.Buffer = (PWSTR)REG_PROTOCOL_VALUE_STR;
+		us.Length = 12 * sizeof(WCHAR);
+		us.MaximumLength = 13 * sizeof(WCHAR);
+		us.Buffer = indexkey;
+		oa.RootDirectory = key;
+		for(i = -1; !status; ++i)
+		{
+			IncrementStringIntW(indexkey, 12);
+			status = NtOpenKey(&subkey, KEY_QUERY_VALUE, &oa);
+			if(!status)
+			{
+				status = NtQueryValueKey(subkey, &ussub, KeyValuePartialInformation, kvpi, sizeof(buffer), &buffersize);
+				if(!status)
+				{
+					if(lpiProtocols)
+					{
+						for(j = 0; wsapi->iProtocol != lpiProtocols[j]; ++j)
+						{
+							if(lpiProtocols[j] == 0)
+							{
+								NtClose(subkey);
+								continue;
+							}
+						}
+					}
+					if(*lpdwBufferLength > sizeof(WSAPROTOCOL_INFOW))
+					{
+						*lpdwBufferLength -= sizeof(WSAPROTOCOL_INFOW);
+						memcpy(&lpProtocolBuffer[i+1], wsapi, sizeof(WSAPROTOCOL_INFOW));
+					}
+				}
+				NtClose(subkey);
+			}
+		}
+		NtClose(key);
+		*lpdwBufferLength = (DWORD)(i * sizeof(WSAPROTOCOL_INFOW));
+	}
+	return i;
+}
+
+int NtGetIPv4Adapters(NTSOCK_IPV4_INTERFACE_INFO *lpInterfaceBuffer, DWORD dwBufferLength)
+{
+	NTSTATUS status;
+	int interfaces = SOCKET_ERROR;
+	HANDLE key, subkey;
+	UNICODE_STRING us;
+	OBJECT_ATTRIBUTES oa;
+	BYTE buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+0x804];
+	BYTE databuf[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)+0x100];
+	PKEY_VALUE_PARTIAL_INFORMATION kvpi;
+	DWORD ressize = 0, reslen, datalen;
+	WCHAR *bindmulstr, *bindstr, *namesrv;
+	unsigned int i, bindstrlen;
+	NTSOCK_IPV4_INTERFACE_INFO ip4ii;
+
+	us.Length = sizeof(REG_TCPIP_LINKAGE_STR) - sizeof(WCHAR);
+	us.MaximumLength = sizeof(REG_TCPIP_LINKAGE_STR);
+	us.Buffer = REG_TCPIP_LINKAGE_STR;
+	oa.Length = sizeof(OBJECT_ATTRIBUTES);
+	oa.ObjectName = &us;
+	oa.Attributes = OBJ_CASE_INSENSITIVE;
+	oa.RootDirectory = NULL;
+	oa.SecurityDescriptor = NULL;
+	oa.SecurityQualityOfService = NULL;
+	status = NtOpenKey(&key, KEY_QUERY_VALUE, &oa);
+	if(!status)
+	{
+		us.Length = sizeof(REG_ROUTE_VALUE_STR) - sizeof(WCHAR);
+		us.MaximumLength = sizeof(REG_ROUTE_VALUE_STR);
+		us.Buffer = REG_ROUTE_VALUE_STR;
+		kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&buffer[0];
+		status = NtQueryValueKey(key, &us, KeyValuePartialInformation, &buffer[0], sizeof(buffer), &ressize);
+		NtClose(key);
+	}
+	if((!status) || (status == STATUS_BUFFER_OVERFLOW))
+	{
+		if(status == STATUS_BUFFER_OVERFLOW)
+		{
+			reslen = (sizeof(buffer) - FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) / sizeof(WCHAR);
+		}
+		else
+		{
+			reslen = ressize / sizeof(WCHAR);
+		}
+		us.Length = sizeof(REG_TCPIP_INTERFACES_STR) - sizeof(WCHAR);
+		us.MaximumLength = sizeof(REG_TCPIP_INTERFACES_STR);
+		us.Buffer = REG_TCPIP_INTERFACES_STR;
+		status = NtOpenKey(&key, KEY_QUERY_VALUE, &oa);
+		if(!status)
+		{
+			interfaces = 0;
+			bindmulstr = (WCHAR*)&buffer[0];
+			bindstr = NULL;
+			kvpi = (PKEY_VALUE_PARTIAL_INFORMATION)&databuf[0];
+			for(i = 1; i < reslen; ++i)
+			{
+				if(bindmulstr[i-1] == L'"')
+				{
+					continue;
+				}
+				else if(bindmulstr[i] == L'\0')
+				{
+					if(bindmulstr[i-1] == L'\0')
+					{
+						break;
+					}
+					else
+					{
+						bindstrlen = (unsigned int)((ULONG_PTR)bindmulstr - (ULONG_PTR)bindstr);
+						if (bindmulstr[i-1] == L'"')
+						{
+							bindmulstr[i-1] = L'\0';
+							bindstrlen -= sizeof(WCHAR);
+						}
+						us.Length = bindstrlen - (USHORT)sizeof(WCHAR);
+						us.MaximumLength = bindstrlen;
+						us.Buffer = bindstr;
+						oa.RootDirectory = key;
+						status = NtOpenKey(&subkey, KEY_QUERY_VALUE, &oa);
+						if(!status)
+						{
+							memset(&ip4ii, 0, sizeof(NTSOCK_IPV4_INTERFACE_INFO));
+							ip4ii.DhcpEnabled = (DWORD)-1;
+							us.Length = sizeof(REG_ENABLEDHCP_VALUE_STR) - sizeof(WCHAR);
+							us.MaximumLength = sizeof(REG_ENABLEDHCP_VALUE_STR);
+							us.Buffer = REG_ENABLEDHCP_VALUE_STR;
+							datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(DWORD);
+							status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+							if(!status)
+							{
+								ip4ii.DhcpEnabled = *(DWORD*)&kvpi->Data[0];
+								if(ip4ii.DhcpEnabled)
+								{
+									us.Length = sizeof(REG_DHCPSRV_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DHCPSRV_VALUE_STR);
+									us.Buffer = REG_DHCPSRV_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										ip4ii.DhcpServer = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									us.Length = sizeof(REG_DHCPIP_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DHCPIP_VALUE_STR);
+									us.Buffer = REG_DHCPIP_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										ip4ii.IpAddress = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									else
+									{
+										us.Length = sizeof(REG_IP_VALUE_STR) - sizeof(WCHAR);
+										us.MaximumLength = sizeof(REG_IP_VALUE_STR);
+										us.Buffer = REG_IP_VALUE_STR;
+										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+										if(!status)
+										{
+											ip4ii.IpAddress = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+										}
+									}
+									us.Length = sizeof(REG_DHCPSNMASK_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DHCPSNMASK_VALUE_STR);
+									us.Buffer = REG_DHCPSNMASK_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										ip4ii.SubnetMask = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									else
+									{
+										us.Length = sizeof(REG_SNMASK_VALUE_STR) - sizeof(WCHAR);
+										us.MaximumLength = sizeof(REG_SNMASK_VALUE_STR);
+										us.Buffer = REG_SNMASK_VALUE_STR;
+										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+										if (!status)
+										{
+											ip4ii.SubnetMask = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+										}
+									}
+									us.Length = sizeof(REG_DHCPDEFGW_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DHCPDEFGW_VALUE_STR);
+									us.Buffer = REG_DHCPDEFGW_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										ip4ii.DefaultGateway = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									else
+									{
+										us.Length = sizeof(REG_DEFGW_VALUE_STR) - sizeof(WCHAR);
+										us.MaximumLength = sizeof(REG_DEFGW_VALUE_STR);
+										us.Buffer = REG_DEFGW_VALUE_STR;
+										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+										if (!status)
+										{
+											ip4ii.DefaultGateway = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+										}
+									}
+									us.Length = sizeof(REG_DHCPNAMESRV_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DHCPNAMESRV_VALUE_STR);
+									us.Buffer = REG_DHCPNAMESRV_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										namesrv = (WCHAR*)&kvpi->Data[0];
+										ip4ii.NameServer = NtInetAddrW(namesrv);
+										for(; *namesrv; ++namesrv)
+										{
+											if((*namesrv == ' ') || (*namesrv == L','))
+											{
+												ip4ii.NameServer2 = NtInetAddrW(++namesrv);
+												break;
+											}
+										}
+									}
+									else
+									{
+										us.Length = sizeof(REG_NAMESRV_VALUE_STR) - sizeof(WCHAR);
+										us.MaximumLength = sizeof(REG_NAMESRV_VALUE_STR);
+										us.Buffer = REG_NAMESRV_VALUE_STR;
+										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (32 * sizeof(WCHAR));
+										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+										if(!status)
+										{
+											namesrv = (WCHAR*)&kvpi->Data[0];
+											ip4ii.NameServer = NtInetAddrW(namesrv);
+											for(; *namesrv; ++namesrv)
+											{
+												if((*namesrv == ' ') || (*namesrv == L','))
+												{
+													ip4ii.NameServer2 = NtInetAddrW(++namesrv);
+													break;
+												}
+											}
+										}
+									}
+									ip4ii.Domain[127] = L'\0';
+									us.Length = sizeof(REG_DHCPDOMAIN_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DHCPDOMAIN_VALUE_STR);
+									us.Buffer = REG_DHCPDOMAIN_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (127 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										memcpy(&ip4ii.Domain[0], &kvpi->Data[0], (kvpi->DataLength > (127 * sizeof(WCHAR))) ? 127 * sizeof(WCHAR) : kvpi->DataLength);
+									}
+									else
+									{
+										us.Length = sizeof(REG_DOMAIN_VALUE_STR) - sizeof(WCHAR);
+										us.MaximumLength = sizeof(REG_DOMAIN_VALUE_STR);
+										us.Buffer = REG_DOMAIN_VALUE_STR;
+										datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (127 * sizeof(WCHAR));
+										status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+										if (!status)
+										{
+											memcpy(&ip4ii.Domain[0], &kvpi->Data[0], (kvpi->DataLength > (127 * sizeof(WCHAR))) ? 127 * sizeof(WCHAR) : kvpi->DataLength);
+										}
+									}
+								}
+								else
+								{
+									ip4ii.DhcpServer.s_addr = INADDR_ANY;
+									us.Length = sizeof(REG_IP_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_IP_VALUE_STR);
+									us.Buffer = REG_IP_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if(!status)
+									{
+										ip4ii.IpAddress = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									us.Length = sizeof(REG_SNMASK_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_SNMASK_VALUE_STR);
+									us.Buffer = REG_SNMASK_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if (!status)
+									{
+										ip4ii.SubnetMask = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									us.Length = sizeof(REG_DEFGW_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DEFGW_VALUE_STR);
+									us.Buffer = REG_DEFGW_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if (!status)
+									{
+										ip4ii.DefaultGateway = NtInetAddrW((WCHAR*)&kvpi->Data[0]);
+									}
+									us.Length = sizeof(REG_NAMESRV_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_NAMESRV_VALUE_STR);
+									us.Buffer = REG_NAMESRV_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (16 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if (!status)
+									{
+										namesrv = (WCHAR*)&kvpi->Data[0];
+										ip4ii.NameServer = NtInetAddrW(namesrv);
+										for(; *namesrv; ++namesrv)
+										{
+											if((*namesrv == ' ') || (*namesrv == L','))
+											{
+												ip4ii.NameServer2 = NtInetAddrW(++namesrv);
+												break;
+											}
+										}
+									}
+									ip4ii.Domain[127] = L'\0';
+									us.Length = sizeof(REG_DOMAIN_VALUE_STR) - sizeof(WCHAR);
+									us.MaximumLength = sizeof(REG_DOMAIN_VALUE_STR);
+									us.Buffer = REG_DOMAIN_VALUE_STR;
+									datalen = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + (127 * sizeof(WCHAR));
+									status = NtQueryValueKey(subkey, &us, KeyValuePartialInformation, kvpi, datalen, &ressize);
+									if (!status)
+									{
+										memcpy(&ip4ii.Domain[0], &kvpi->Data[0], (kvpi->DataLength > (127 * sizeof(WCHAR))) ? 127 * sizeof(WCHAR) : kvpi->DataLength);
+									}
+								}
+							}
+							NtClose(subkey);
+							if((ip4ii.DhcpEnabled != (DWORD)-1) && (dwBufferLength >= sizeof(NTSOCK_IPV4_INTERFACE_INFO)))
+							{
+								dwBufferLength -= sizeof(NTSOCK_IPV4_INTERFACE_INFO);
+								memcpy(&lpInterfaceBuffer[interfaces], &ip4ii, sizeof(NTSOCK_IPV4_INTERFACE_INFO));
+							}
+						}
+						bindstr = NULL;
+					}
+				}
+				else if(!bindstr)
+				{
+					bindstr = &bindmulstr[i];
+				}
+			}
+			NtClose(key);
+		}
+	}
+	return interfaces;
 }
 
 SOCKET NtSocket(int af, int type, int protocol)
@@ -1309,7 +1751,7 @@ int NtPoll(NTPOLLFD *fds, ULONG nfds, int timeout)
 	if(!status)
 	{
 		signals = (int)pasd->SocketCount;
-		for(i = 0, j = 0; i < signals; ++i)
+		for(i = 0, j = 0; i < (unsigned int)signals; ++i)
 		{
 			for(; j < nfds; ++j)
 			{
@@ -1508,6 +1950,154 @@ int NtGetSockOpt(SOCKET sock, int level, int optname, const char *optval, int *o
 					case PVD_CONFIG:
 						return SOCKET_ERROR;
 						break;
+					case SO_ACCEPTCONN:
+						if(*optlen >= sizeof(BOOL))
+						{
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.Flags.Listening;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_BROADCAST:
+						if(*optlen >= sizeof(BOOL))
+						{
+							if(sockctx->SharedData.AddressFamily == AF_INET6)
+							{
+								return SOCKET_ERROR;
+							}
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.Flags.Broadcast;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_CONDITIONAL_ACCEPT:
+						if(*optlen >= sizeof(BOOL))
+						{
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.Flags.UseDelayedAcceptance;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_DEBUG:
+						if(*optlen >= sizeof(BOOL))
+						{
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.Flags.Debug;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_DONTLINGER:
+						if(*optlen >= sizeof(BOOL))
+						{
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.LingerData.l_onoff;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_DONTROUTE:
+						return SOCKET_ERROR;
+						break;
+					case SO_GROUP_PRIORITY:
+						return SOCKET_ERROR;
+						break;
+					case SO_KEEPALIVE:
+						return SOCKET_ERROR;
+						break;
+					case SO_LINGER:
+						if(*optlen >= sizeof(struct linger))
+						{
+							*(struct linger*)optval = sockctx->SharedData.LingerData;
+							*optlen = sizeof(struct linger);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_OOBINLINE:
+						return SOCKET_ERROR;
+						break;
+					case SO_REUSEADDR:
+						if(*optlen >= sizeof(BOOL))
+						{
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.Flags.ReuseAddresses;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_EXCLUSIVEADDRUSE:
+						if(*optlen >= sizeof(BOOL))
+						{
+							*(BOOL*)optval = (BOOL)sockctx->SharedData.Flags.ExclusiveAddressUse;
+							*optlen = sizeof(BOOL);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_SNDBUF:
+						if(*optlen >= sizeof(int))
+						{
+							*(int*)optval = (int)sockctx->SharedData.SizeOfSendBuffer;
+							*optlen = sizeof(int);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_RCVBUF:
+						if(*optlen >= sizeof(int))
+						{
+							*(int*)optval = (int)sockctx->SharedData.SizeOfRecvBuffer;
+							*optlen = sizeof(int);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_SNDTIMEO:
+						if(*optlen >= sizeof(DWORD))
+						{
+							*(DWORD*)optval = (DWORD)sockctx->SharedData.SendTimeout;
+							*optlen = sizeof(DWORD);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
+					case SO_RCVTIMEO:
+						if(*optlen >= sizeof(DWORD))
+						{
+							*(DWORD*)optval = (DWORD)sockctx->SharedData.RecvTimeout;
+							*optlen = sizeof(DWORD);
+						}
+						else
+						{
+							return SOCKET_ERROR;
+						}
+						break;
 					default:
 						return SOCKET_ERROR;
 				}
@@ -1522,7 +2112,7 @@ int NtGetSockOpt(SOCKET sock, int level, int optname, const char *optval, int *o
 
 int NtIoctlSocket(SOCKET sock, long cmd, u_long *argp)
 {
-	NTSTATUS status;
+	NTSTATUS status = STATUS_INVALID_PARAMETER;
 	HANDLE event;
 	IO_STATUS_BLOCK iosb;
 	AFD_SOCK_INFO asi;
@@ -1565,7 +2155,7 @@ int NtIoctlSocket(SOCKET sock, long cmd, u_long *argp)
 
 NTSTATUS NtIoctlSocketEx(SOCKET sock, ULONG cmd, PVOID inbuffer, ULONG inbuflen, PVOID outbuffer, ULONG outbuflen)
 {
-	NTSTATUS status;
+	NTSTATUS status = STATUS_INVALID_PARAMETER;
 	HANDLE event;
 	IO_STATUS_BLOCK iosb;
 	AFD_SOCK_INFO asi;
@@ -1710,7 +2300,7 @@ int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen)
 	BYTE buffer[SOCK_CONTEXT_BUF_SIZE];
 	ULONG sctxlen;
 	PSOCKET_CONTEXT sockctx;
-	int sa_remote_offset;
+	ULONG sa_remote_offset;
 
 	if(CheckSocketParameter(sock))
 	{
@@ -1732,7 +2322,7 @@ int NtGetPeerName(SOCKET sock, struct sockaddr *name, int *namelen)
 		status = 0;
 		if(sockctx->SharedData.SizeOfRemoteAddress <= *namelen)
 		{
-			sa_remote_offset = sizeof(SOCK_SHARED_INFO) + (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
+			sa_remote_offset = sizeof(SOCK_SHARED_INFO) + (sockctx->SharedData.SizeOfLocalAddress & 0xF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
 			if(AfdVistaOrHigher())
 			{
 				sa_remote_offset += sizeof(GUID);
@@ -1922,7 +2512,7 @@ int NtAcceptExLegacy(SOCKET listensock, SOCKET acceptsock, struct sockaddr *addr
 			status = NtWaitForSingleObject(event, TRUE, NULL);
 			if(!status)
 			{
-				status = iosb.Information;
+				status = (NTSTATUS)iosb.Information;
 			}
 		}
 		NtClose(event);
@@ -1950,7 +2540,7 @@ int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen)
 	BYTE buffer[SOCK_CONTEXT_BUF_SIZE];
 	ULONG sctxlen;
 	PSOCKET_CONTEXT sockctx;
-	int sa_remote_offset;
+	ULONG sa_remote_offset;
 
 	if(CheckSocketParameter(sock))
 	{
@@ -1975,7 +2565,7 @@ int NtConnect(SOCKET sock, const struct sockaddr *name, int namelen)
 			{
 				conlen += sockctx->SharedData.SizeOfRemoteAddress;
 				sockctx->SharedData.State = SocketConnected;
-				sa_remote_offset = sizeof(SOCK_SHARED_INFO) + (sockctx->SharedData.SizeOfLocalAddress & 0x7FFFFFF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
+				sa_remote_offset = sizeof(SOCK_SHARED_INFO) + (sockctx->SharedData.SizeOfLocalAddress & 0xF0) + (((sockctx->SharedData.SizeOfLocalAddress & 0xF) > 0) << 4) + 8;
 				if(AfdVistaOrHigher())
 				{
 					sa_remote_offset += sizeof(GUID);
@@ -2053,7 +2643,7 @@ int NtConnectExLegacy(SOCKET sock, const struct sockaddr *name, int namelen)
 			status = NtWaitForSingleObject(event, TRUE, &li);
 			if(status == STATUS_TIMEOUT)
 			{
-				NtCancelIoFile((HANDLE)sock, &iosb);
+				NtCancelIoSocket(sock, FALSE);
 			}
 			else if(!status)
 			{
@@ -2084,7 +2674,7 @@ int NtDisconnect(SOCKET sock, DWORD flags)
 			status = NtWaitForSingleObject(event, TRUE, &li);
 			if(status == STATUS_TIMEOUT)
 			{
-				NtCancelIoFile((HANDLE)sock, &iosb);
+				NtCancelIoSocket(sock, FALSE);
 			}
 			else if(!status)
 			{
@@ -2135,14 +2725,43 @@ int NtShutdown(SOCKET sock, int how)
 	return -(!!status);
 }
 
+NTSTATUS NtCancelIoSocket(SOCKET sock, BOOL all)
+{
+	NTSTATUS status;
+	HANDLE ntdll;
+	UNICODE_STRING us;
+	ANSI_STRING as;
+	IO_STATUS_BLOCK iosb;
+	FARPROC __NtCancelIoFileEx;
+
+	if(all)
+	{
+		us.Length = sizeof(NTDLL_STR) - sizeof(WCHAR);
+		us.MaximumLength = sizeof(NTDLL_STR);
+		us.Buffer = NTDLL_STR;
+		status = LdrGetDllHandle(NULL, NULL, &us, &ntdll);
+		if(!status)
+		{
+			as.Length = sizeof(NTCANCELIOFILEEX_STR) - sizeof(char);
+			as.MaximumLength = sizeof(NTCANCELIOFILEEX_STR);
+			as.Buffer = NTCANCELIOFILEEX_STR;
+			status = LdrGetProcedureAddress(ntdll, &as, 0, (PVOID*)&__NtCancelIoFileEx);
+			if(!status)
+			{
+				return (NTSTATUS)__NtCancelIoFileEx((HANDLE)sock, NULL, &iosb);
+			}
+		}
+	}
+	return NtCancelIoFile((HANDLE)sock, &iosb);
+}
+
 NTSTATUS NtCloseSocket(SOCKET sock)
 {
-	IO_STATUS_BLOCK iosb;
-	NtCancelIoFile((HANDLE)sock, &iosb);
+	NtCancelIoSocket(sock, FALSE);
 	return NtClose((HANDLE)sock);
 }
 
-int NtGetHostname(char *name,int namelen)
+int NtGetHostname(char *name, int namelen)
 {
 	NTSTATUS status;
 	HANDLE key;
@@ -2184,7 +2803,7 @@ int NtGetHostname(char *name,int namelen)
 		status = NtQueryValueKey(key, &ussub, KeyValuePartialInformation, kvpi, sizeof(buffer), &buffersize);
 		if(!status)
 		{
-			if(kvpi->DataLength >= namelen)
+			if(kvpi->DataLength >= (unsigned int)namelen)
 			{
 				namelen--;
 			}
@@ -2204,7 +2823,7 @@ int NtGetHostname(char *name,int namelen)
 	return -(!!status);
 }
 
-int NtGetDomainName(char *name,int namelen)
+int NtGetDomainName(char *name, int namelen)
 {
 	NTSTATUS status;
 	HANDLE key;
@@ -2246,7 +2865,7 @@ int NtGetDomainName(char *name,int namelen)
 		status = NtQueryValueKey(key, &ussub, KeyValuePartialInformation, kvpi, sizeof(buffer), &buffersize);
 		if(!status)
 		{
-			if(kvpi->DataLength >= namelen)
+			if(kvpi->DataLength >= (unsigned int)namelen)
 			{
 				namelen--;
 			}
